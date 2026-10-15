@@ -1,0 +1,35 @@
+# Keil generated build output (configured by FOC_T.uvprojx)
+/MDK-ARM/FOC_T/
+**/Objects/
+**/Listings/
+/build/
+*.o
+*.obj
+*.d
+*.crf
+*.axf
+*.elf
+*.hex
+*.bin
+*.map
+*.lst
+*.lnp
+*.htm
+*.html
+
+# Per-user Keil editor/window state
+*.uvguix*
+*.uvgui.*
+
+# Logs, temporary files and manual backup copies
+*.log
+*.bak
+*.tmp
+*.temp
+*.orig
+*.rej
+*~
+.codex_backup/
+.codex_staging/
+.DS_Store
+Thumbs.db

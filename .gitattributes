@@ -1,0 +1,7 @@
+# Preserve the existing firmware files byte-for-byte (including encoding/EOL).
+* -text
+
+# New repository documentation and Git rules use LF.
+*.md text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf

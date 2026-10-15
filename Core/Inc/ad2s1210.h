@@ -1,0 +1,73 @@
+#ifndef __AD2S1210_H
+#define __AD2S1210_H
+
+#include <stdint.h>
+
+void AD2S1210_Init(void);
+void AD2S1210_Sample(void);
+void AD2S1210_Run_1kHz(void);
+void AD2S1210_Run_20kHz(void);
+
+uint16_t AD2S1210_ReadPosition(void);
+int16_t AD2S1210_ReadVelocity(void);
+uint8_t AD2S1210_ReadFault(void);
+float AD2S1210_VelocityToMechanicalRPM(int16_t velocity_raw);
+float AD2S1210_GetRealtimeSpeedRPM(void);
+uint8_t AD2S1210_IsInitialized(void);
+uint8_t AD2S1210_IsFeedbackValid(void);
+uint8_t AD2S1210_IsPositionDataValid(void);
+
+extern volatile uint16_t ad2s_position_raw;
+extern volatile int16_t ad2s_velocity_raw;
+extern volatile float ad2s_position_rad;
+extern volatile float ad2s_speed_rpm;
+extern volatile float ad2s_speed_rpm_filt;
+extern volatile uint8_t ad2s_fault;
+extern volatile uint8_t ad2s_fault_initial;
+extern volatile uint8_t ad2s_fault_after_reset;
+extern volatile uint8_t ad2s_fault_first_direct;
+extern volatile uint8_t ad2s_fault_config_confirm;
+extern volatile uint8_t ad2s_fault_first_hal;
+extern volatile uint8_t ad2s_fault_recovery_attempted;
+extern volatile uint8_t ad2s_fault_before_recovery;
+extern volatile uint8_t ad2s_fault_after_recovery;
+extern volatile uint8_t ad2s_fault_recovery_status;
+extern volatile uint8_t ad2s_fault_diagnose_status;
+extern volatile uint8_t ad2s_slow_link_diag_active;
+extern volatile uint32_t ad2s_spi_kernel_hz;
+extern volatile uint32_t ad2s_spi_sclk_hz;
+extern volatile uint8_t ad2s_runtime_spi_status;
+extern volatile uint32_t ad2s_spi_cfg1_readback;
+extern volatile uint8_t ad2s_software_reset_status;
+extern volatile uint8_t ad2s_init_status;
+extern volatile uint8_t ad2s_config_parity_error_count;
+extern volatile uint8_t ad2s_config_error_address;
+extern volatile uint8_t ad2s_config_error_value;
+extern volatile uint8_t ad2s_config_repair_count;
+extern volatile uint8_t ad2s_config_repair_failed_count;
+extern volatile uint8_t ad2s_config_repair_error_address;
+extern volatile uint8_t ad2s_config_repair_error_value;
+extern volatile uint8_t ad2s_control_before;
+extern volatile uint8_t ad2s_control_readback;
+extern volatile uint8_t ad2s_exc_readback;
+extern volatile uint8_t ad2s_dos_overrange_readback;
+extern volatile uint8_t ad2s_dos_mismatch_readback;
+extern volatile uint8_t ad2s_lot_high_readback;
+extern volatile uint8_t ad2s_lot_low_readback;
+extern volatile uint8_t ad2s_threshold_config_status;
+extern volatile uint32_t ad2s_exc_frequency_hz;
+extern volatile uint8_t ad2s_initialized;
+extern volatile uint8_t ad2s_feedback_valid;
+extern volatile uint8_t ad2s_position_data_valid;
+extern volatile uint8_t ad2s_fault_latched;
+extern volatile uint16_t ad2s_valid_streak;
+extern volatile uint32_t ad2s_position_read_count;
+extern volatile uint32_t ad2s_velocity_read_count;
+extern volatile uint32_t ad2s_spi_error_count;
+extern volatile uint8_t ad2s_dwt_ready;
+extern volatile uint32_t ad2s_acquisition_last_cycles;
+extern volatile uint32_t ad2s_acquisition_max_cycles;
+extern volatile uint32_t ad2s_acquisition_budget_cycles;
+extern volatile uint32_t ad2s_acquisition_over_budget_count;
+
+#endif
