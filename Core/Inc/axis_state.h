@@ -12,7 +12,8 @@ typedef enum {
     AXIS_STATE_OPEN_LOOP_TEST = 4,
     AXIS_STATE_FAULT = 5,
     AXIS_STATE_STARTUP_SEQUENCE = 6, /* request only */
-    AXIS_STATE_INITIALIZING = 7
+    AXIS_STATE_INITIALIZING = 7,
+    AXIS_STATE_WAIT_FOR_STOP = 8
 } AxisState;
 
 enum {
@@ -20,7 +21,9 @@ enum {
     AXIS_ERROR_INVALID_STATE = 1U << 0,
     AXIS_ERROR_CURRENT_FEEDBACK = 1U << 1,
     AXIS_ERROR_RESOLVER_FEEDBACK = 1U << 2,
-    AXIS_ERROR_POWER_STAGE_TIMEOUT = 1U << 3
+    AXIS_ERROR_POWER_STAGE_TIMEOUT = 1U << 3,
+    AXIS_ERROR_STOP_TIMEOUT = 1U << 4,
+    AXIS_ERROR_ALIGNMENT_UNSTABLE = 1U << 5
 };
 
 extern volatile AxisState foc_axis_state;
@@ -36,7 +39,8 @@ extern volatile uint8_t foc_axis_calibrate_offset;
 extern volatile uint8_t foc_axis_offset_valid;
 
 void AxisState_Init(void);
-void AxisState_Update1ms(uint8_t current_ready, uint8_t resolver_ready);
+void AxisState_Update1ms(uint8_t current_ready, uint8_t resolver_ready,
+                           float speed_rpm, float resolver_angle_rad);
 void AxisState_CheckSafety(uint8_t current_ready, uint8_t resolver_ready);
 
 #endif

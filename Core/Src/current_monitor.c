@@ -36,6 +36,9 @@ static uint32_t sum_u;
 static uint32_t sum_v;
 static uint32_t sum_w;
 static uint8_t monitor_ready;
+static uint8_t sample_valid;
+volatile uint32_t monitor_sample_age_cycles;
+volatile uint32_t monitor_sample_sequence;
 
 static float CurrentMonitor_CodeToAmp(uint16_t raw, float offset)
 {
@@ -64,6 +67,9 @@ void CurrentMonitor_Init(void)
     sum_v = 0U;
     sum_w = 0U;
     monitor_ready = 0U;
+    sample_valid = 0U;
+    monitor_sample_age_cycles = 0U;
+    monitor_sample_sequence = 0U;
 }
 
 uint8_t CurrentMonitor_IsReady(void)
@@ -71,7 +77,12 @@ uint8_t CurrentMonitor_IsReady(void)
     return monitor_ready;
 }
 
-void CurrentMonitor_Run_20kHz(float electrical_angle_rad)
+uint8_t CurrentMonitor_IsSampleValid(void)
+{
+    return sample_valid;
+}
+
+void CurrentMonitor_Acquire20kHz(void)
 {
     uint16_t raw_u;
     uint16_t raw_v;
@@ -80,18 +91,16 @@ void CurrentMonitor_Run_20kHz(float electrical_angle_rad)
     float ia;
     float ib;
     float ic;
-    float sine;
-    float cosine;
-    float i_alpha;
-    float i_beta;
-    float id;
-    float iq;
-
+    sample_valid = 0U;
     if (CurrentSense_HasNewSample() == 0U)
     {
+        if (monitor_sample_age_cycles != UINT32_MAX)
+            ++monitor_sample_age_cycles;
         return;
     }
 
+    monitor_sample_age_cycles = 0U;
+    ++monitor_sample_sequence;
     CurrentSense_GetRaw(&raw_u, &raw_v, &raw_w, &raw_bus);
     monitor_vbus_v = (float)raw_bus * CURRENT_MONITOR_VREF_V /
                      CURRENT_MONITOR_ADC_FULL_SCALE *
@@ -137,11 +146,33 @@ void CurrentMonitor_Run_20kHz(float electrical_angle_rad)
     ic = monitor_ic_a;
     (void)ic;
 
-    clarke(&i_alpha, &i_beta, ia, ib);
+    {
+        float alpha;
+        float beta;
+        clarke(&alpha, &beta, ia, ib);
+        monitor_i_alpha_a = alpha;
+        monitor_i_beta_a = beta;
+    }
+    sample_valid = 1U;
+}
+
+void CurrentMonitor_Transform(float electrical_angle_rad)
+{
+    float sine;
+    float cosine;
+    float id;
+    float iq;
+    if (!sample_valid)
+        return;
     fast_sin_cos(electrical_angle_rad, &sine, &cosine);
-    park(&id, &iq, i_alpha, i_beta, sine, cosine);
-    monitor_i_alpha_a = i_alpha;
-    monitor_i_beta_a = i_beta;
+    park(&id, &iq, monitor_i_alpha_a, monitor_i_beta_a, sine, cosine);
     monitor_id_a = id;
     monitor_iq_a = iq;
+}
+
+/* Compatibility wrapper for callers that already prepared the cycle angle. */
+void CurrentMonitor_Run_20kHz(float electrical_angle_rad)
+{
+    CurrentMonitor_Acquire20kHz();
+    CurrentMonitor_Transform(electrical_angle_rad);
 }

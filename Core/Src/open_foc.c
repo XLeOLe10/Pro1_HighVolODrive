@@ -443,23 +443,20 @@ void OpenFOC_SetRotorFeedback(float resolver_angle_rad,
                               float resolver_speed_rpm,
                               uint8_t valid)
 {
-    float direction = FOC_Direction();
     float speed_direction =
         (foc_speed_feedback_direction < 0.0f) ? -1.0f : 1.0f;
 
-    resolver_angle_feedback_rad = resolver_angle_rad;
-    resolver_speed_feedback_rpm = resolver_speed_rpm;
-    motion_feedback_valid = valid;
-    foc_speed_feedback_rpm = speed_direction * resolver_speed_feedback_rpm;
-
-    /* In state 2, foc_theta must remain the commanded open-loop field angle;
-       resolver position is observed only and must not overwrite that angle. */
-    if (foc_control_state_active != FOC_CONTROL_RESOLVER_OPEN_LOOP_TEST)
-    {
-        theta_e = Value_normalize(direction * resolver_angle_feedback_rad *
-                                  FOC_POLE_PAIR_RATIO + foc_theta_offset_rad);
-        foc_theta = theta_e;
+    uint8_t finite_feedback = !Value_isnan(resolver_angle_rad) &&
+                              !Value_isinf(resolver_angle_rad) &&
+                              !Value_isnan(resolver_speed_rpm) &&
+                              !Value_isinf(resolver_speed_rpm);
+    /* Invalid numeric input must not reach angle normalization or the PI. */
+    if (finite_feedback) {
+        resolver_angle_feedback_rad = resolver_angle_rad;
+        resolver_speed_feedback_rpm = resolver_speed_rpm;
     }
+    motion_feedback_valid = valid && finite_feedback;
+    foc_speed_feedback_rpm = speed_direction * resolver_speed_feedback_rpm;
 }
 
 void OpenFOC_Stop(void)
@@ -499,7 +496,8 @@ void OpenFOC_Ramp_1ms(void)
         }
     }
 
-    AxisState_Update1ms(current_feedback_valid, motion_feedback_valid);
+    AxisState_Update1ms(current_feedback_valid, motion_feedback_valid,
+                        foc_speed_feedback_rpm, resolver_angle_feedback_rad);
     foc_aligning = (foc_axis_state == AXIS_STATE_ENCODER_OFFSET_CALIBRATION);
 
     if ((previous_task_id != foc_axis_task_id) ||
@@ -563,13 +561,10 @@ void OpenFOC_Ramp_1ms(void)
                                        FOC_Abs(foc_open_loop_test_pole_pairs);
         foc_iq_ref_a = 0.0f;
         foc_uq_ff = foc_uq_open_loop_norm;
-        FOC_ResetCurrentPI();
-        FOC_ResetSpeedPI();
         FOC_UpdatePolePairEstimator();
     }
     else
     {
-        FOC_ResetSpeedPI();
         foc_speed_ref_rpm = 0.0f;
         foc_current_rpm = 0.0f;
         foc_open_loop_electrical_rpm = 0.0f;
@@ -594,6 +589,22 @@ void OpenFOC_SetCurrentFeedback(float id_a, float iq_a, uint8_t valid)
     current_feedback_valid = valid;
 }
 
+/* Called after lifecycle transitions and before the current Park transform.
+   This is the single angle snapshot shared by feedback and output this cycle. */
+void OpenFOC_PrepareAngle20kHz(void)
+{
+    if (foc_axis_state == AXIS_STATE_ENCODER_OFFSET_CALIBRATION)
+        theta_e = 0.0f;
+    else if (foc_axis_state == AXIS_STATE_OPEN_LOOP_TEST) {
+        open_loop_theta_e = Value_normalize(open_loop_theta_e +
+            foc_open_loop_electrical_rpm * (FOC_TWO_PI / 60.0f) * FOC_CURRENT_TS);
+        theta_e = open_loop_theta_e;
+    } else
+        theta_e = Value_normalize(FOC_Direction() * resolver_angle_feedback_rad *
+                                  FOC_POLE_PAIR_RATIO + foc_theta_offset_rad);
+    foc_theta = theta_e;
+}
+
 void OpenFOC_Run_20kHz(void)
 {
     float du = 0.5f;
@@ -612,9 +623,6 @@ void OpenFOC_Run_20kHz(void)
 
     if (foc_axis_state == AXIS_STATE_ENCODER_OFFSET_CALIBRATION)
     {
-        FOC_ResetCurrentPI();
-        theta_e = 0.0f;
-        foc_theta = 0.0f;
         FOC_DqToDuty(Value_Limit(foc_align_u_norm,
                                  FOC_ALIGN_U_MAX,
                                  0.0f),
@@ -622,20 +630,11 @@ void OpenFOC_Run_20kHz(void)
     }
     else if (foc_control_state_active == FOC_CONTROL_RESOLVER_OPEN_LOOP_TEST)
     {
-        FOC_ResetCurrentPI();
-        open_loop_theta_e = Value_normalize(
-            open_loop_theta_e + foc_open_loop_electrical_rpm *
-            (FOC_TWO_PI / 60.0f) * FOC_CURRENT_TS);
-        theta_e = open_loop_theta_e;
-        foc_theta = theta_e;
         FOC_DqToDuty(0.0f, foc_uq_open_loop_norm,
                      theta_e, &du, &dv, &dw);
     }
     else
     {
-        theta_e = Value_normalize(FOC_Direction() * resolver_angle_feedback_rad *
-                                  FOC_POLE_PAIR_RATIO + foc_theta_offset_rad);
-        foc_theta = theta_e;
         FOC_UpdateDaxisPI();
         FOC_UpdateQaxisPI();
         FOC_DqToDuty(foc_ud_pi, foc_uq_ff + foc_uq_pi,

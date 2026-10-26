@@ -100,44 +100,36 @@ static void BoardPowerStage_Init(void)
 #endif
 }
 
+/* Six PWM pads only. Register writes avoid HAL_GPIO_Init in the fast ISR.
+   MODER: 01 = GPIO output, 10 = alternate function. Other pads are preserved. */
+static void BoardPWM_SetMode(uint32_t mode)
+{
+  MODIFY_REG(GPIOA->MODER, (3UL << 16) | (3UL << 18) | (3UL << 20),
+             (mode << 16) | (mode << 18) | (mode << 20));
+  MODIFY_REG(GPIOB->MODER, (3UL << 2), (mode << 2));
+  MODIFY_REG(GPIOE->MODER, (3UL << 16) | (3UL << 20),
+             (mode << 16) | (mode << 20));
+}
+
 static void BoardPWM_PinsSafeGPIO(void)
 {
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOE_CLK_ENABLE();
-
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8 | GPIO_PIN_9 | GPIO_PIN_10, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8 | GPIO_PIN_10, GPIO_PIN_RESET);
-
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_9 | GPIO_PIN_10;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-  GPIO_InitStruct.Pin = GPIO_PIN_1;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-  GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_10;
-  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+  GPIOA->BSRR = (uint32_t)(GPIO_PIN_8 | GPIO_PIN_9 | GPIO_PIN_10) << 16;
+  GPIOB->BSRR = (uint32_t)GPIO_PIN_1 << 16;
+  GPIOE->BSRR = (uint32_t)(GPIO_PIN_8 | GPIO_PIN_10) << 16;
+  BoardPWM_SetMode(1UL);
 }
 
 #if (BOARD_POWER_STAGE_MODE != BOARD_POWER_STAGE_DISABLED)
 static void BoardPWM_ConnectTIM1(void)
 {
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  GPIO_InitStruct.Alternate = GPIO_AF1_TIM1;
-  GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_9 | GPIO_PIN_10;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-  GPIO_InitStruct.Pin = GPIO_PIN_1;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-  GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_10;
-  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+  MODIFY_REG(GPIOA->AFR[1], (15UL << 0) | (15UL << 4) | (15UL << 8),
+             (1UL << 0) | (1UL << 4) | (1UL << 8));
+  MODIFY_REG(GPIOB->AFR[0], (15UL << 4), (1UL << 4));
+  MODIFY_REG(GPIOE->AFR[1], (15UL << 0) | (15UL << 8), (1UL << 0) | (1UL << 8));
+  BoardPWM_SetMode(2UL);
 }
 
 #if (RESOLVER_DYNAMIC_TEST_LOCKOUT == 0U)
@@ -401,10 +393,10 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
                              AD2S1210_IsPositionDataValid() &&
                              AD2S1210_IsFeedbackValid());
 
-    CurrentMonitor_Run_20kHz(foc_theta);
+    CurrentMonitor_Acquire20kHz();
     OpenFOC_SetCurrentFeedback(monitor_id_a,
                                monitor_iq_a,
-                               CurrentMonitor_IsReady());
+                               CurrentMonitor_IsSampleValid());
 
     speed_loop_divider++;
     if (speed_loop_divider >= 20U)
@@ -413,6 +405,10 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
       OpenFOC_Ramp_1ms();
     }
 
+    OpenFOC_PrepareAngle20kHz();
+    CurrentMonitor_Transform(foc_theta);
+    OpenFOC_SetCurrentFeedback(monitor_id_a, monitor_iq_a,
+                               CurrentMonitor_IsSampleValid());
     OpenFOC_Run_20kHz();
 
 #if (BOARD_POWER_STAGE_MODE != BOARD_POWER_STAGE_DISABLED)

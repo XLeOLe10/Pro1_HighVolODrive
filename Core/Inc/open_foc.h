@@ -11,6 +11,8 @@ typedef enum
 } FOC_ControlState;
 
 void OpenFOC_Init(void);
+/* Prepare once after state update, before current Park transform/output. */
+void OpenFOC_PrepareAngle20kHz(void);
 void OpenFOC_Run_20kHz(void);
 void OpenFOC_Run_1ms(void);
 void OpenFOC_Ramp_1ms(void);
