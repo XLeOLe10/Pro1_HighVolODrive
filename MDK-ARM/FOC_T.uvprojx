@@ -435,6 +435,11 @@
               <FilePath>../Core/Src/current_monitor.c</FilePath>
             </File>
             <File>
+              <FileName>axis_state.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/axis_state.c</FilePath>
+            </File>
+            <File>
               <FileName>open_foc.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Core/Src/open_foc.c</FilePath>

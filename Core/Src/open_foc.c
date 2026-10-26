@@ -1,4 +1,5 @@
 #include "open_foc.h"
+#include "axis_state.h"
 #include "tim.h"
 #include "Xmath.h"
 #include <stdint.h>
@@ -11,7 +12,6 @@
 #define FOC_SPEED_TS                  0.001f
 #define FOC_ALIGN_U_DEFAULT           0.05f
 #define FOC_ALIGN_U_MAX               0.05f
-#define FOC_ALIGN_TIME_MS             1200U
 #define FOC_SPEED_RAMP_RPM_PER_MS     0.20f  /* 200 rpm/s: 0 -> 100 rpm in about 0.5 s */
 #define FOC_SPEED_TEST_STEP_RPM       25.0f
 
@@ -42,9 +42,9 @@ static float ramped_speed_ref_rpm;
 static float open_loop_theta_e;
 static uint8_t motion_feedback_valid;
 static uint8_t current_feedback_valid;
-static uint8_t foc_enable;
-static uint8_t run_was_requested;
-static uint32_t align_ms_left;
+static uint32_t previous_task_id;
+static AxisState previous_axis_state;
+static FOC_ControlState previous_control_mode;
 static uint16_t pole_estimate_stable_ms;
 static float pole_estimate_last_speed_rpm;
 
@@ -121,16 +121,6 @@ static float FOC_Direction(void)
 static float FOC_Abs(float value)
 {
     return (value < 0.0f) ? -value : value;
-}
-
-static FOC_ControlState FOC_SanitizeState(FOC_ControlState state)
-{
-    if ((state == FOC_CONTROL_SPEED_CURRENT_LOOP) ||
-        (state == FOC_CONTROL_RESOLVER_OPEN_LOOP_TEST))
-    {
-        return state;
-    }
-    return FOC_CONTROL_CURRENT_LOOP;
 }
 
 static void FOC_ResetCurrentPI(void)
@@ -412,13 +402,14 @@ void OpenFOC_Init(void)
     open_loop_theta_e = 0.0f;
     motion_feedback_valid = 0U;
     current_feedback_valid = 0U;
-    foc_enable = 1U;
-    run_was_requested = 0U;
-    align_ms_left = FOC_ALIGN_TIME_MS;
+    AxisState_Init();
+    previous_task_id = 0U;
+    previous_axis_state = AXIS_STATE_INITIALIZING;
+    previous_control_mode = FOC_CONTROL_CURRENT_LOOP;
     foc_run_request = 0U;
     foc_control_state_request = FOC_CONTROL_CURRENT_LOOP;
     foc_control_state_active = FOC_CONTROL_CURRENT_LOOP;
-    foc_aligning = 1U;
+    foc_aligning = 0U;
     foc_iq_ref_a = 0.0f;
     foc_uq_ff = 0.0f;
     foc_speed_ref_rpm = 0.0f;
@@ -474,9 +465,8 @@ void OpenFOC_SetRotorFeedback(float resolver_angle_rad,
 void OpenFOC_Stop(void)
 {
     foc_run_request = 0U;
-    foc_enable = 0U;
-    run_was_requested = 0U;
-    align_ms_left = FOC_ALIGN_TIME_MS;
+    foc_axis_requested_state = AXIS_STATE_IDLE;
+    AxisState_CheckSafety(current_feedback_valid, motion_feedback_valid);
     ramped_speed_ref_rpm = 0.0f;
     foc_speed_ref_rpm = 0.0f;
     foc_current_rpm = 0.0f;
@@ -491,13 +481,7 @@ void OpenFOC_Stop(void)
 
 void OpenFOC_Ramp_1ms(void)
 {
-    FOC_ControlState requested_state;
     int8_t speed_step_command;
-
-    if (foc_enable == 0U)
-    {
-        return;
-    }
 
     speed_step_command = foc_speed_step_command;
     if (speed_step_command != 0)
@@ -515,109 +499,48 @@ void OpenFOC_Ramp_1ms(void)
         }
     }
 
-    requested_state = FOC_SanitizeState(foc_control_state_request);
+    AxisState_Update1ms(current_feedback_valid, motion_feedback_valid);
+    foc_aligning = (foc_axis_state == AXIS_STATE_ENCODER_OFFSET_CALIBRATION);
 
-    if (foc_run_request == 0U)
+    if ((previous_task_id != foc_axis_task_id) ||
+        (previous_axis_state != foc_axis_state) ||
+        (previous_control_mode != foc_control_state_active))
     {
-        run_was_requested = 0U;
-        align_ms_left = FOC_ALIGN_TIME_MS;
-        foc_aligning = 1U;
-        ramped_speed_ref_rpm = 0.0f;
+        FOC_ResetCurrentPI();
+        FOC_ResetSpeedPI();
+        foc_iq_ref_a = 0.0f;
+        foc_uq_ff = 0.0f;
+        ramped_speed_ref_rpm =
+            (foc_axis_state == AXIS_STATE_CLOSED_LOOP_CONTROL) ?
+            foc_speed_feedback_rpm : 0.0f;
+        open_loop_theta_e = 0.0f;
+        if (foc_axis_state == AXIS_STATE_OPEN_LOOP_TEST)
+            FOC_ResetPolePairEstimator();
+        if ((previous_axis_state == AXIS_STATE_ENCODER_OFFSET_CALIBRATION) &&
+            (foc_axis_offset_valid != 0U))
+        {
+            if (foc_axis_calibrate_offset != 0U)
+                foc_theta_offset_rad = Value_normalize(
+                    -FOC_Direction() * resolver_angle_feedback_rad *
+                    FOC_POLE_PAIR_RATIO);
+            theta_e = Value_normalize(FOC_Direction() * resolver_angle_feedback_rad *
+                                     FOC_POLE_PAIR_RATIO + foc_theta_offset_rad);
+            foc_theta = theta_e;
+        }
+        previous_task_id = foc_axis_task_id;
+        previous_axis_state = foc_axis_state;
+        previous_control_mode = foc_control_state_active;
+    }
+
+    if ((foc_axis_state != AXIS_STATE_CLOSED_LOOP_CONTROL) &&
+        (foc_axis_state != AXIS_STATE_OPEN_LOOP_TEST))
+    {
         foc_speed_ref_rpm = 0.0f;
         foc_current_rpm = 0.0f;
         foc_open_loop_electrical_rpm = 0.0f;
         foc_iq_ref_a = 0.0f;
         foc_uq_ff = 0.0f;
-        FOC_ResetCurrentPI();
-        FOC_ResetSpeedPI();
         return;
-    }
-
-    if (run_was_requested == 0U)
-    {
-        run_was_requested = 1U;
-        foc_control_state_active = requested_state;
-        if (requested_state == FOC_CONTROL_RESOLVER_OPEN_LOOP_TEST)
-        {
-            /* Pure open-loop bring-up: apply Uq at commanded angle and ramp
-               immediately.  No resolver-based alignment is required. */
-            align_ms_left = 0U;
-            foc_aligning = 0U;
-        }
-        else
-        {
-            align_ms_left = FOC_ALIGN_TIME_MS;
-            foc_aligning = 1U;
-        }
-        ramped_speed_ref_rpm =
-            (requested_state == FOC_CONTROL_RESOLVER_OPEN_LOOP_TEST) ?
-            0.0f : foc_speed_feedback_rpm;
-        open_loop_theta_e = 0.0f;
-        FOC_ResetCurrentPI();
-        FOC_ResetSpeedPI();
-        if (requested_state == FOC_CONTROL_RESOLVER_OPEN_LOOP_TEST)
-        {
-            /* A new commissioning run must earn a fresh valid estimate. */
-            FOC_ResetPolePairEstimator();
-        }
-    }
-
-    if (align_ms_left > 0U)
-    {
-        align_ms_left--;
-        foc_aligning = 1U;
-        foc_iq_ref_a = 0.0f;
-        foc_uq_ff = 0.0f;
-        foc_open_loop_electrical_rpm = 0.0f;
-        if (align_ms_left == 0U)
-        {
-            if (foc_control_state_active ==
-                FOC_CONTROL_RESOLVER_OPEN_LOOP_TEST)
-            {
-                /* State 2 is pure commanded-angle operation.  Resolver angle,
-                   validity and fault state never affect its starting angle. */
-                theta_e = 0.0f;
-                foc_theta = 0.0f;
-                ramped_speed_ref_rpm = 0.0f;
-                open_loop_theta_e = 0.0f;
-            }
-            else
-            {
-                if (foc_auto_calibrate_offset != 0U)
-                {
-                    foc_theta_offset_rad = Value_normalize(
-                        -FOC_Direction() * resolver_angle_feedback_rad *
-                        FOC_POLE_PAIR_RATIO);
-                }
-                theta_e = Value_normalize(
-                    FOC_Direction() * resolver_angle_feedback_rad *
-                    FOC_POLE_PAIR_RATIO + foc_theta_offset_rad);
-                foc_theta = theta_e;
-                ramped_speed_ref_rpm = foc_speed_feedback_rpm;
-                open_loop_theta_e = 0.0f;
-            }
-            foc_aligning = 0U;
-        }
-        return;
-    }
-
-    foc_aligning = 0U;
-
-    if (requested_state != foc_control_state_active)
-    {
-        foc_control_state_active = requested_state;
-        ramped_speed_ref_rpm =
-            (requested_state == FOC_CONTROL_RESOLVER_OPEN_LOOP_TEST) ?
-            0.0f : foc_speed_feedback_rpm;
-        open_loop_theta_e =
-            (requested_state == FOC_CONTROL_RESOLVER_OPEN_LOOP_TEST) ?
-            0.0f : theta_e;
-        FOC_ResetCurrentPI();
-        FOC_ResetSpeedPI();
-        if (requested_state == FOC_CONTROL_RESOLVER_OPEN_LOOP_TEST)
-        {
-            FOC_ResetPolePairEstimator();
-        }
     }
 
     if (foc_control_state_active == FOC_CONTROL_SPEED_CURRENT_LOOP)
@@ -677,8 +600,8 @@ void OpenFOC_Run_20kHz(void)
     float dv = 0.5f;
     float dw = 0.5f;
 
-    if ((foc_enable == 0U) || (foc_run_request == 0U) ||
-        (current_feedback_valid == 0U))
+    AxisState_CheckSafety(current_feedback_valid, motion_feedback_valid);
+    if ((foc_axis_output_enabled == 0U) || (foc_run_request == 0U))
     {
         foc_du = 0.5f;
         foc_dv = 0.5f;
@@ -687,7 +610,7 @@ void OpenFOC_Run_20kHz(void)
         return;
     }
 
-    if (align_ms_left > 0U)
+    if (foc_axis_state == AXIS_STATE_ENCODER_OFFSET_CALIBRATION)
     {
         FOC_ResetCurrentPI();
         theta_e = 0.0f;

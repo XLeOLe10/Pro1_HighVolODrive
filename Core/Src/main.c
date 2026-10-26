@@ -30,6 +30,7 @@
 #include "current_sense.h"
 #include "current_monitor.h"
 #include "open_foc.h"
+#include "axis_state.h"
 #include "ad2s1210.h"
 #include <stdio.h>
 /* USER CODE END Includes */
@@ -45,8 +46,8 @@
 #define RESOLVER_TEST_UQ_NORM            0.02f
 #define SPEED_LOOP_TARGET_RPM            50.0f
 #define CURRENT_TELEMETRY_PERIOD_MS        5U
-/* AD2S1210 fault and validity values are retained for diagnostics only; they
-   do not stop PWM or clear foc_run_request in the commissioning build. */
+/* Closed-loop operation requires healthy resolver feedback. Open-loop test
+   deliberately does not require rotor feedback. */
 #define RESOLVER_DYNAMIC_TEST_LOCKOUT     0U
 /* USER CODE END PD */
 
@@ -271,40 +272,9 @@ int main(void)
     {
 #if (BOARD_POWER_STAGE_MODE != BOARD_POWER_STAGE_DISABLED)
       MotorPWM_StartOutputs();
-      BoardPWM_ConnectTIM1();
       power_pwm_started = 1U;
 #endif
     }
-
-#if (BOARD_POWER_STAGE_MODE != BOARD_POWER_STAGE_DISABLED)
-#if (RESOLVER_DYNAMIC_TEST_LOCKOUT != 0U)
-    resolver_dynamic_test_lockout_active = 1U;
-    foc_run_request = 0U;
-    if (power_stage_enabled != 0U)
-    {
-      BoardPowerStage_Disable();
-      power_stage_enabled = 0U;
-    }
-#else
-    /* Resolver status/faults are diagnostic-only during commissioning.  A run
-       request and calibrated current channels are sufficient to enable EN. */
-    if ((power_pwm_started != 0U) &&
-        (foc_run_request != 0U) &&
-        (CurrentMonitor_IsReady() != 0U))
-    {
-      if (power_stage_enabled == 0U)
-      {
-        BoardPowerStage_Enable();
-        power_stage_enabled = 1U;
-      }
-    }
-    else if (power_stage_enabled != 0U)
-    {
-      BoardPowerStage_Disable();
-      power_stage_enabled = 0U;
-    }
-#endif
-#endif
 
     /* 200 Hz nonblocking CSV telemetry for speed-loop tuning.  Column order:
        speed_ref_rpm,speed_feedback_rpm */
@@ -428,7 +398,13 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     AD2S1210_Run_20kHz();
     OpenFOC_SetRotorFeedback(ad2s_position_rad,
                              ad2s_speed_rpm_filt,
-                             AD2S1210_IsPositionDataValid());
+                             AD2S1210_IsPositionDataValid() &&
+                             AD2S1210_IsFeedbackValid());
+
+    CurrentMonitor_Run_20kHz(foc_theta);
+    OpenFOC_SetCurrentFeedback(monitor_id_a,
+                               monitor_iq_a,
+                               CurrentMonitor_IsReady());
 
     speed_loop_divider++;
     if (speed_loop_divider >= 20U)
@@ -437,10 +413,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
       OpenFOC_Ramp_1ms();
     }
 
-    CurrentMonitor_Run_20kHz(foc_theta);
-    OpenFOC_SetCurrentFeedback(monitor_id_a,
-                               monitor_iq_a,
-                               CurrentMonitor_IsReady());
     OpenFOC_Run_20kHz();
 
 #if (BOARD_POWER_STAGE_MODE != BOARD_POWER_STAGE_DISABLED)
@@ -450,18 +422,31 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     if (power_stage_enabled != 0U)
     {
       BoardPowerStage_Disable();
+      BoardPWM_PinsSafeGPIO();
       power_stage_enabled = 0U;
     }
 #else
-    /* AD2S status is recorded but never disables PWM or clears the run
-       request.  Only an explicit stop request disables the power stage. */
-    if ((power_stage_enabled != 0U) && (foc_run_request == 0U))
+    /* The ISR is the sole owner of runtime gate enable/disable. */
+    if ((power_pwm_started != 0U) && (foc_run_request != 0U) &&
+        (foc_axis_output_enabled != 0U))
+    {
+      if (power_stage_enabled == 0U)
+      {
+        BoardPWM_ConnectTIM1();
+        BoardPowerStage_Enable();
+        power_stage_enabled = 1U;
+      }
+    }
+    else if (power_stage_enabled != 0U)
     {
       BoardPowerStage_Disable();
+      BoardPWM_PinsSafeGPIO();
       power_stage_enabled = 0U;
     }
 #endif
 #endif
+
+    foc_axis_power_stage_enabled = power_stage_enabled;
 
     if (ad2s_dwt_ready != 0U)
     {
