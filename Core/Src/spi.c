@@ -44,9 +44,6 @@ void MX_SPI1_Init(void)
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase = SPI_PHASE_2EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  /* Keep the already verified 250 kHz rate for configuration and all normal
-     position/velocity reads.  Runtime SPI rate switching is deliberately not
-     used in this stable commissioning build. */
   hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_256;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
@@ -85,9 +82,7 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* spiHandle)
 
   /** Initializes the peripherals clock
   */
-    PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_SPI1 |
-                                                RCC_PERIPHCLK_CKPER;
-    PeriphClkInitStruct.CkperClockSelection = RCC_CLKPSOURCE_HSI;
+    PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_SPI1;
     PeriphClkInitStruct.Spi123ClockSelection = RCC_SPI123CLKSOURCE_CLKP;
     if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
     {
@@ -99,14 +94,13 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* spiHandle)
 
     __HAL_RCC_GPIOB_CLK_ENABLE();
     /**SPI1 GPIO Configuration
-    PB3     ------> SPI1_SCK
-    PB4     ------> SPI1_MISO
+    PB3 (JTDO/TRACESWO)     ------> SPI1_SCK
+    PB4 (NJTRST)     ------> SPI1_MISO
     PB5     ------> SPI1_MOSI
     */
     GPIO_InitStruct.Pin = GPIO_PIN_3|GPIO_PIN_4|GPIO_PIN_5;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
-    /* 250 kHz does not require a high slew rate; slower edges reduce ringing. */
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     GPIO_InitStruct.Alternate = GPIO_AF5_SPI1;
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
@@ -129,8 +123,8 @@ void HAL_SPI_MspDeInit(SPI_HandleTypeDef* spiHandle)
     __HAL_RCC_SPI1_CLK_DISABLE();
 
     /**SPI1 GPIO Configuration
-    PB3     ------> SPI1_SCK
-    PB4     ------> SPI1_MISO
+    PB3 (JTDO/TRACESWO)     ------> SPI1_SCK
+    PB4 (NJTRST)     ------> SPI1_MISO
     PB5     ------> SPI1_MOSI
     */
     HAL_GPIO_DeInit(GPIOB, GPIO_PIN_3|GPIO_PIN_4|GPIO_PIN_5);

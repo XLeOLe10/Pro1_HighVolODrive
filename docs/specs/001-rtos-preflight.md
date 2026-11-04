@@ -1,12 +1,12 @@
 # 001：RTOS 引入前审查与 CubeMX 配置
 
-- 状态：**配置复查通过，可进入隔离副本生成**。尚未生成、合并或编译 RTOS 固件；最新结果见第 11 节。
+- 状态：**已原地生成并完成生成后审查；全量编译失败（2 错误、2 警告），RTOS 业务接入尚未完成**。最新结果与后续安排见第 12 节。
 - 创建日期：2026-10-29；最近复查：2026-11-04（Asia/Shanghai）。
 - 工程：D:/stm32H750/High_fengshan/FOC_T；分支：Xiao_ODrive。
 - 审查提交：fd025767ccac1e9b3f7ff10d5b0c36398511bbc1；原始固件基线：48c42eb / v1.0.0。
 - 2026-10-29 初审开始时工作区和暂存区干净。2026-11-04 复查 HEAD=69bbebe，用户已修改 FOC_T.ioc，暂存区为空；用户负责 CubeMX 操作、验收、提交、推送、PR 和合并。
 - 本规格对应用户提出的第一步：引入 RTOS 前先审查定时器、中断、HAL 时基、内存，提供可操作的配置表。
-- 用户决定：2026-11-03 明确 RTOS/优先级及新的 ADC 分配；2026-11-04 要求复查配置、保存讲解偏好，并取消默认的逐项批准等待。本次执行范围是复查与文档记录，不自动执行生成或固件修改。
+- 用户决定：2026-11-03 明确 RTOS/优先级及新的 ADC 分配；2026-11-04 更新讲解与批准偏好，随后因空间不足选择在现有工程原地生成。用户先提交 c36ed99，再完成 CubeMX 生成并请求检查。本次 AI 执行差异审查、全量构建和文档记录，没有修改固件源码或再次生成。
 
 ## 1. 文档收录与共同审查意见
 
@@ -47,7 +47,7 @@
 
 2026-10-29 已执行 Keil **全量重建**，耗时 2 分 49 秒，0 Error(s)、0 Warning(s)。Code=45434、RO=754、RW=456、ZI=1784 字节。链接器报告 ROM 总量 46284 字节，约 45.20 KiB；这不是 .axf 文件的磁盘大小。
 
-完整命令、构建输出、最新 map 摘要和产物 SHA256 保存在 [基线构建记录](../validation/001-rtos-baseline-build.txt)。本次构建后受控固件和工程配置仍无差异。编译通过只适用于当前裸机基线；RTOS 构建和上板验证尚未执行。
+2026-10-29 的命令、构建输出、map 摘要和产物 SHA256 保存在 [基线构建记录](../validation/001-rtos-baseline-build.txt)。当时构建后受控固件和工程配置无差异，该次通过仅适用于裸机基线；2026-11-04 的 RTOS 构建失败结果见第 12 节，上板验证仍未执行。
 
 ## 4. 当前执行路径、占用与问题
 
@@ -92,18 +92,15 @@ H750 的 TIM1_UP_IRQn 是独立向量，不套用其他 STM32 的 TIM1_UP_TIM10 
 
 阈值选 5 时，taskENTER_CRITICAL 使用的 BASEPRI 不屏蔽优先级 0 的 TIM1；不能拿它充当上述数据保护。实现前需在本规格补齐最终结构、发布 API 和时序预算。可评审的简单方向是：在临界区外计算，保存/恢复 PRIMASK 的短固定长度区间只负责发布；不包含 SPI、浮点运算或格式化，并实测新增中断延迟。也可使用经证明的所有权方案；仅说“双缓冲+volatile 索引”仍不足以证明生命周期和顺序。
 
-## 5. CubeMX 配置顺序：先在隔离副本生成
+## 5. CubeMX 生成策略与已执行操作
 
-2026-10-29 初审时 .ioc 缺少的外设与 TIM1 参数现已补齐。2026-11-04 复查通过，允许进入隔离副本生成；原工程手写代码尚未同步新的 ADC 分配及 RTOS。
+用户于 2026-11-04 因空间不足明确选择在现有工程生成，替代此前的隔离副本建议；这是当前生效策略，不要求另建工程或等待 PR 合并。
 
-1. 保存最新 .ioc；按用户的手动 Git 习惯，可先把当前配置和文档提交为生成前检查点。无需另设默认批准关口。
-2. 用 CubeMX 打开正式工程的 FOC_T.ioc，保持 MCU、H7 V1.12.1 包和现有 200 MHz 时钟树。遇到升级提示先保持当前版本。
-3. 第 6 节配置已由用户补齐并通过静态复查；在工程副本打开同名 .ioc，确认 MCU、包版本和目标生成目录。
-4. 在 Project Manager 保留 MDK-ARM 工程输出、现有工程名/目录、每个外设独立 .c/.h 与 Keep User Code；建议打开生成前备份、关闭 Delete previously generated files when not re-generated。
-5. **在隔离副本点击 Generate Code，避免直接覆盖正式工程。** Keep User Code 不能保护生成区的手工逻辑。
-6. 生成后先由 AI 审查差异、重复中断/回调和手写初始化保留情况，再按后续任务范围逐文件合并。不得整目录覆盖 Core 或 MDK-ARM。
-
-当前分支仍为 Xiao_ODrive。Git 提交、PR 与分支整理由用户执行；若 demo PR 尚未合并，建议先完成它，再从同步后的 main 建立本功能分支，避免新功能混入 demo PR。
+1. 用户已提交 c36ed99（前cubeMx架构）；生成前工作区干净，关键源码、FOC_T.ioc 和 Keil 工程已受 Git 跟踪。
+2. 用户已用当前 H7 V1.12.1 / MDK-ARM 配置在现有 FOC_T 目录生成。FOC_T.ioc 相对检查点仅 DeletePrevious=true 改为 false；KeepUserCode=true、BackupPrevious=false 保持。
+3. AI 已检查生成差异并全量构建；结果为 2 错误、2 警告，详见第 12 节。
+4. 后续在当前分支逐项修补并审查差异，不整包恢复旧 Core 以免撤掉新 RTOS/ADC 配置；也不把原始生成结果视作可运行固件。
+5. 每轮保留同一份规格与验证证据。Git 暂存、提交、推送、PR、合并仍由用户执行；本次没有烧录、调试或上电。
 
 ## 6. RTOS 与外设配置表
 
@@ -191,7 +188,7 @@ Break 当前关闭是现状，不能据此宣称存在 TIM1 硬件过流关断�
 
 ## 7. 配置之后需要实施的代码工作
 
-1. 对照生成目录和本基线，补回全部手工外设配置与用户模块到 Keil；保留 ARMCC5、现有数学库和 HAL/CMSIS 依赖。
+1. 对照原地生成后的工作区与 c36ed99 检查点，修补生成区覆盖的手写逻辑；保留 ARMCC5、数学库和 HAL/CMSIS 依赖。已确认原 39 个 Keil 源码条目全部保留，RTOS 等新增 12 个条目均存在；不需重复添加已有模块。
 2. 合并 HAL 时基：只保留一份 HAL_TIM_PeriodElapsedCallback。TIM1 分支执行现有 FOC；TIM7 分支仅递增 HAL tick。不能在 TIM1 分支增 HAL 毫秒，也不能将 FOC 跑到 TIM7 分支。
 3. 正确接入 SysTick/SVC/PendSV；消除旧空 handler 与 port 重复定义。USART1_IRQHandler 当前在 USER CODE 区，生成器可能另生成同名函数，需合并。
 4. 将原 while 后台逻辑迁到 StartAppTask，用绝对 tick 的周期等待和超期记录；保留约 1 ms 采集与约 5 ms 遥测，避免相对延时累计漂移。错过 deadline 时统计并跳过过期周期或重置基准，不连续追赶过去的 osDelayUntil 目标造成忙循环。SPI 只由该任务正常访问；HAL_Delay 保留在调度器启动前的初始化路径，任务周期等待使用 RTOS API。
@@ -210,8 +207,8 @@ Break 当前关闭是现状，不能据此宣称存在 TIM1 硬件过流关断�
 | --- | --- | --- |
 | 文档导入 | 原稿与副本 SHA256 相同；原团队规则保留；争议项进入 spec | PASS：文档检查 |
 | 基线构建 | 对审查提交全量编译，记录工具/命令/结果与 map | PASS：2026-10-29 裸机基线 0 错误 0 警告；不是新 RTOS 代码结果 |
-| .ioc 配置复查 | 与用户最终外设/引脚、TIM1、RTOS 和 IRQ 目标一致，既有源码差异单独列出 | PASS：2026-11-04 可隔离生成；VOS 差异等见第 11 节，生成后的实现仍待核查 |
-| RTOS 构建 | 内核/wrapper/port/heap 各自匹配，无重复 handler；全量编译通过；Flash/RAM 不越界 | NOT_RUN |
+| .ioc 配置复查 | 与用户最终外设/引脚、TIM1、RTOS 和 IRQ 目标一致，既有源码差异单独列出 | PASS：2026-11-04 生成配置与主要外设实现已核对；应用代码差异和 VOS 变更见第 12 节 |
+| RTOS 构建 | 内核/wrapper/port/heap 各自匹配，无重复 handler；全量编译通过；Flash/RAM 不越界 | FAIL：2026-11-04 全量编译 2 错误、2 警告；未进入成功链接，新固件大小/map 未验证；见第 12 节与构建记录 |
 | 双时基 | 调度器启动前后 HAL_GetTick 均每毫秒增长；RTOS tick 1000 Hz；停一个业务任务不停止 HAL tick | NOT_RUN：需要新固件和测量 |
 | 控制时序 | 对照基线测 PWM、TRGO2/ADC、ISR 周期/抖动；无新增控制超期；按实际 49.98 us 周期复核统计阈值与可用预算 | NOT_RUN：当前没有基线波形/WCET 数值 |
 | 后台周期 | 记录采集完成间隔、最大耗时和 deadline miss；无连续追赶造成忙循环；失败和旧数据处理符合确认后的策略 | NOT_RUN；阈值/策略待审阅 |
@@ -226,14 +223,15 @@ Break 当前关闭是现状，不能据此宣称存在 TIM1 硬件过流关断�
 ## 9. 当前进度与下一步
 
 - [x] 已按用户方案配置 FreeRTOS + CMSIS v2，一个 appTask；现有 FOC 保持在 TIM1 ISR，任务业务代码待迁入。
-- [x] TIM7 时基/优先级 4、SysTick/PendSV 15、门槛 5、初始内存预算的配置已复查；生成后实际宏和时基代码待验证。
+- [x] TIM7 时基/优先级 4、SysTick/PendSV 15、门槛 5、初始内存预算的配置与生成宏/时基实现已静态核对；实际走时和余量仍待运行验证。
 - [x] TIM1 的 PSC/ARR/RCR/CCR4 保持原值；约 20.008 kHz 与标称 20 kHz 的差异仍记录，未修改控制时序。
 - [x] 用户已保存 .ioc，AI 完成生成前配置复查。
-- [ ] 在隔离副本生成，再审查差异并按后续任务范围合并代码。
+- [x] 用户以 c36ed99 为检查点完成原地生成；AI 完成生成差异审查与全量构建，发现 2 处编译错误及未完成的业务接入。
+- [ ] 按第 12 节修补重复入口、安全启动、ADC 读取、任务业务、数据交接与故障处理，再全量编译。
 - [ ] 实施前细化数据发布、采集超期/固定 dt、启动与异常处理的具体接口和验收阈值；解释取舍并更新本规格。用户明确要求批准或确需其决策时再提出。
 - [ ] 补充真实板卡版本、当前已验证供电/负载/模式、基线 ISR 最坏耗时与波形；缺少这些不妨碍当前 .ioc 审查，但不能宣称上板完成。
 
-回退：本轮纯文档可单独撤销；后续 Cube 生成只合入已审阅差异。已共享的提交使用新 revert 提交，不改写同伴历史；v1.0.0 不移动。
+回退：生成前检查点为 c36ed99，关键源码与 Keil 配置均已跟踪。按文件/差异恢复需要保留的旧逻辑，不批量放弃用户修改；新增 RTOS 文件单独审查。已共享的提交使用新 revert 提交，不改写同伴历史；v1.0.0 不移动。
 
 ## 10. 官方资料与本地核查入口
 
@@ -245,7 +243,7 @@ Break 当前关闭是现状，不能据此宣称存在 TIM1 硬件过流关断�
 - [ODrive fw-v0.5.6](https://github.com/odriverobotics/ODrive/releases/tag/fw-v0.5.6)：原稿参考版本；本轮不迁入实现。
 - 本地 RTOS 包：C:/Users/LEGION/STM32Cube/Repository/STM32Cube_FW_H7_V1.12.1/Middlewares/Third_Party/FreeRTOS/Source；核查 include/task.h、CMSIS_RTOS_V2/freertos_os2.h、CMSIS_RTOS_V2/cmsis_os2.c、portable/RVDS/ARM_CM7/ReadMe.txt。
 
-## 11. 2026-11-04 配置复查与操作说明
+## 11. 2026-11-04 配置复查与操作说明（历史记录；当前生成策略见第 12 节）
 
 - 当前 HEAD：69bbebe；分支 Xiao_ODrive，比本地记录的 origin/Xiao_ODrive 超前 1 次提交。本轮未 fetch，不能据此断言 GitHub 最新状态。
 - 复查开始时仅用户的 FOC_T.ioc 未暂存；本轮 AI 仅更新 AGENTS.md 与本规格，未修改 .ioc、固件或 Keil 配置，未生成/编译/烧录。
@@ -266,7 +264,7 @@ Break 当前关闭是现状，不能据此宣称存在 TIM1 硬件过流关断�
 
 用生活例子理解：TIM1 像生产线上必须按固定节拍工作的工位；FreeRTOS 像安排后台工作的调度员，appTask 是先配的一名后台工作人员。TIM7 和 SysTick 是两块分工不同的钟，分别给 HAL 和调度员计时。把调度员引入工厂，不应改变关键工位的节拍。
 
-建议用户下一步：
+当时建议的副本生成步骤（已由用户后续的原地生成决定替代）：
 
 1. 保存 CubeMX 当前配置。需要 Git 检查点时，由用户提交本次 .ioc 与文档，建议说明 docs/config: prepare RTOS generation；不要求先合并 PR 才能继续隔离实验。
 2. 在工程目录之外新建一个生成专用目录，例如 D:/stm32H750/High_fengshan/FOC_T_rtos_gen_20261104，并复制当前工程工作文件。可不复制 .git 与旧编译输出；必须带上最新未提交的 .ioc。不要只 clone 旧提交而遗漏刚配置的内容。
@@ -283,3 +281,60 @@ Break 当前关闭是现状，不能据此宣称存在 TIM1 硬件过流关断�
 - 任务/中断共享数据、失败hook、实际堆栈余量以及控制抖动仍未验证。配置正确只能说明设计图上的选项已对齐，不能证明工厂运行无误。
 
 本轮验证：复查 .ioc、手写代码、现有 spec 与本机 Cube 默认；交叉复核优先级/ADC/USART/VOS差异。未运行新的构建或硬件测试。
+
+## 12. 2026-11-04 原地生成后审查与下一步
+
+### 12.1 范围与证据
+
+- 对照检查点：c36ed99（前cubeMx架构）；分支 Xiao_ODrive。本地 origin 跟踪记录显示 ahead 2，本次未 fetch，不据此断言 GitHub 最新状态。
+- 用户已完成 CubeMX 原地生成。审查开始时 18 个受控文件有变更，新增 FreeRTOSConfig.h、freertos.c、TIM7 时基、FreeRTOS 中间件与 3 个 LL 头文件；保留这些用户生成结果，未暂存。
+- AI 本轮只审查、执行 Keil 全量构建、更新本规格并归档日志，没有修改 .ioc、固件源文件或 Keil 工程配置；没有烧录或启动调试。
+- 全量构建使用 ARMCC 5.06 update 7 build 960，耗时 2 分 44 秒，Keil 进程退出码 2，结果为 2 Error(s)、2 Warning(s)，Target not created。尚未成功链接，不使用旧 .map/.axf 宣称 RTOS 内存或固件通过。
+- 命令、完整输出与关键输入 SHA256：[生成后构建记录](../validation/001-rtos-generated-review-build.txt)。
+
+### 12.2 必须修补的问题
+
+| ID / 分类 | 实际证据 | 影响与后续处理 |
+| --- | --- | --- |
+| G01 / 编译 FAIL | main.c:446 和 :553 两次定义 HAL_TIM_PeriodElapsedCallback；编译器在 :553 报 #247 | 合为唯一回调，TIM1 执行原控制链，TIM7 仅 HAL_IncTick；把手写分支放入生成回调的 USER CODE 区，避免再次生成重复 |
+| G02 / 编译 FAIL | stm32h7xx_it.c:182 和 :209 两次定义 USART1_IRQHandler；编译器在 :209 报 #247 | 保留生成入口，移除旧重复定义；头文件 :56/:59 重复声明一并整理，不重复调用 HAL |
+| G03 / 任务业务未接入 | main.c:261 启动调度器，原后台循环仍位于 :267 起；freertos.c:143 的 appTask 只有 osDelay(1) | 调度器成功启动后原后台循环不可达。把旋变采集、启停后台逻辑、5 ms 遥测迁入唯一业务任务；FOC 继续留 TIM1 |
+| G04 / 测量映射 FAIL | current_sense.c:70 W 仍读 ADC1 JDR2，:72 母线仍读 ADC3 JDR1 | 生成的 ADC3 R1 已是 W、R2 是母线；分别改为 ADC3 JDR1 / JDR2，不能只改初始化而保留旧读数 |
+| G05 / 安全启动退化 | main.c:221–227 丢失 BoardPowerStage_Init 和 BoardPWM_PinsSafeGPIO 调用；函数体仍在 :86/:105，因此构建报 2 个未引用警告 | gpio.c:54 仍正确初始化 EN 为低，不能误报 EN 未初始化；真正丢失的是校准前六路 PWM 引脚强制 GPIO 低的策略。恢复明确的启动次序，并放在可保留区 |
+| G06 / 故障与创建失败处理缺失 | freertos.c:72/:81 两个故障 hook 为空，:124 不检查 osThreadNew；main.c:257/:261 不检查内核初始化/启动异常返回；FreeRTOSConfig.h:156 断言只屏蔽部分中断后死循环 | 检测开启不等于已有安全处置。补统一无阻塞故障入口、输出撤销及创建/启动失败处理；门槛 5 的 BASEPRI 不屏蔽 TIM1=0，断言死循环不能当作功率关断 |
+| G07 / 并发与时序缺口 | 旋变角度/速度/valid 仍分别发布；启停请求和 power_stage_enabled 跨后台与 TIM1；见第 4.3 节 | 迁任务时定义一致快照和启停交接，不能仅搬动 while 或加入 volatile；SPI 超时和固定 1 ms 测速假设仍需落实超期处理 |
+
+主程序在 main.c:245–250 启动 ADC/内部 TIM1 后才创建 RTOS 对象。中断早于调度器并非一概错误；但接入任务时需明确初始化依赖与失败路径，保证后台未就绪或创建失败时不会进入功率使能流程。
+
+用生活例子理解：当前调度室和员工名单已经建好，但新员工只在等待，旧工作清单仍留在调度器接管后不再经过的位置；同时两个同名入口造成编译冲突。要完成的是职责交接和入口合并，而非继续增加任务数量。
+
+### 12.3 已核对正确的部分
+
+| 项目 | 生成后证据 / 结论 |
+| --- | --- |
+| RTOS 配置 | FreeRTOSConfig.h:68 tick1000、:71 heap16384、:77 栈检查2、:79 malloc hook1、:126 heap4、:138 lowest15、:144 syscall5；freertos.c:51–55 appTask/Normal/4096 B |
+| 两套时基 / 内核入口 | TIM7 时基文件 :41 提供 HAL_InitTick，主时钟下 PSC199/ARR999，hal_conf.h:168 优先级4；cmsis_os2.c:159 提供 SysTick；SVC/PendSV 映射 RVDS port；旧空 handler 已移除。静态链路正确，需先修 G01 才能构建运行 |
+| NVIC / MSP | TIM1=0、USART1=5、SysTick/PendSV=15、GROUP4；startup_stm32h750xx.s:32 MSP=0x1000，C 库 heap 仍0x200 |
+| ADC 注入序列 | adc.c:98 U=ADC1 R1 CH16，:161 V=ADC2 R1 CH19，:224 W=ADC3 R1 CH10，:244 母线=ADC3 R2 CH1；均 TRGO2 上升沿、64.5cycles；:359 保留 PC3_C 模拟开关 OPEN |
+| ADC1 regular / injected 采样时间 | regular 1.5cycles 先配置，随后同通道 injected 64.5cycles 写入最终采样寄存器；本地 HAL adc_ex.c:2199 支持该结论，现应用不启动 regular，未将其列为运行阻塞 |
+| TIM1 | PSC1、ARR2499、中心对齐1、RCR1、CH4 PWM2/1250、TRGO2 OC4REF、死区100均保留；增加 Base_Init 与 Base_MspInit 是生成方式变化，不是定时器时钟丢失 |
+| SPI / UART / GPIO | SPI1 Mode1、250 kHz、PB3/4/5；USART1 115200/8N1、D2PCLK2、PB6/7；EN 初始低、AD2S 四根控制脚初始高均正确。per_ck=HSI 设置移到 main.c:431 PeriphCommonClock_Config，并在 :214 调用 |
+| Keil 模块 / 端口 | 原39个源码条目全部保留，新增12个，共51个路径均存在且无重复；CMSIS v2、heap_4、RVDS/ARM_CM4F port匹配ARMCC5。该包端口适用于本器件r1p1，不能因目录名CM4F误换端口 |
+| 编译器 / 内存边界 | ARMCC5.06u7/DFP4.1.3保持；Flash128KiB、DTCM128KiB、AXI512KiB配置保持；真正分配落点和余量因链接失败尚未确认 |
+| 大量工程差异 | uvoptx XML叶值无变化，属于格式；uvprojx保留原模块并增加RTOS，不按diff行数判断功能被重写 |
+
+### 12.4 其他差异与潜在风险
+
+- main.c:382 VOS3→VOS1、:421 Flash等待4→2已实际生成，HCLK仍200MHz。这是额外的供电/Flash档位变化，不是RTOS所必需；集成时按保持基线的原则核对并统一 .ioc 与源码，不能只改生成源码造成下次反复。
+- uvprojx:81 的 AfterMake/RunUserProg2 从0变1，但 :83 命令为空；本次报错不由此引起，集成时恢复关闭无意义的构建后动作。
+- 原 usart.c 中 fputc 重定向被删除。当前真实遥测使用 snprintf + HAL_UART_Transmit_IT，未发现 printf 调用，因此不判为当前遥测必然失效；如需保留该调试接口，应放入手写模块或 USER CODE 区。
+- 只有“配置/静态核对”通过；任务栈与堆余量、PWM/ADC波形、中断最坏耗时、真实故障关断、旋变采集失效和数据超龄处理均未上板验证。现有旋变故障仅诊断的策略也未因引入 RTOS 自动解决。
+
+### 12.5 后续实现顺序与职责
+
+1. 合并 G01/G02 重复入口，保留唯一 TIM1/TIM7 分发与 USART1 handler；不通过删除控制链来消除编译错误。
+2. 恢复安全初始化，在调度器和任务就绪后按已定义依赖启动采样/后台；将业务循环接入 appTask，以绝对周期等待并记录超期。TIM1 继续负责高频控制，appTask 正常独占 SPI/UART 发送缓冲区。
+3. 修正 W/母线读数，并完成旋变/遥测一致快照与启停交接设计。明确每份数据由谁写、谁读、何时可用，ISR 不等待后台任务；落实固定 dt 与超时失败的处理。
+4. 补齐任务/内核创建失败、堆分配失败、栈溢出、断言及已有错误入口的无阻塞关断和诊断。不能只补空函数或用死循环冒充已关断。
+5. 清理额外 VOS/Flash、空构建后动作和按需保留的调试接口；保持算法、协议和无关功能不扩展。
+6. 对修补后的最终差异再次全量编译，检查 Flash/RAM 与实际 heap/stack 落点；通过后才安排用户指定条件的板上时序、余量和故障验证。本次没有执行这些后续源码修改。
