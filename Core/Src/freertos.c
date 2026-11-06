@@ -25,7 +25,9 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "app_runtime.h"
+#include "app_policy.h"
+#include "board_safety.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -71,25 +73,16 @@ void vApplicationMallocFailedHook(void);
 /* USER CODE BEGIN 4 */
 void vApplicationStackOverflowHook(xTaskHandle xTask, signed char *pcTaskName)
 {
-   /* Run time stack overflow checking is performed if
-   configCHECK_FOR_STACK_OVERFLOW is defined to 1 or 2. This hook function is
-   called if a stack overflow is detected. */
+  (void)xTask;
+  (void)pcTaskName;
+  BoardSafety_Fatal(BOARD_FAULT_STACK);
 }
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN 5 */
 void vApplicationMallocFailedHook(void)
 {
-   /* vApplicationMallocFailedHook() will only be called if
-   configUSE_MALLOC_FAILED_HOOK is set to 1 in FreeRTOSConfig.h. It is a hook
-   function that will get called if a call to pvPortMalloc() fails.
-   pvPortMalloc() is called internally by the kernel whenever a task, queue,
-   timer or semaphore is created. It is also called by various parts of the
-   demo application. If heap_1.c or heap_2.c are used, then the size of the
-   heap available to pvPortMalloc() is defined by configTOTAL_HEAP_SIZE in
-   FreeRTOSConfig.h, and the xPortGetFreeHeapSize() API function can be used
-   to query the size of free heap space that remains (although it does not
-   provide information on how the remaining heap might be fragmented). */
+  BoardSafety_Fatal(BOARD_FAULT_MALLOC);
 }
 /* USER CODE END 5 */
 
@@ -100,7 +93,11 @@ void vApplicationMallocFailedHook(void)
   */
 void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
-
+  /* Also catches a failed osKernelInitialize without modifying Cube's call. */
+  if (osKernelGetState() != osKernelReady)
+  {
+    BoardSafety_Fatal(BOARD_FAULT_KERNEL);
+  }
   /* USER CODE END Init */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -124,7 +121,10 @@ void MX_FREERTOS_Init(void) {
   appTaskHandle = osThreadNew(StartAppTask, NULL, &appTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
+  if (appTaskHandle == NULL)
+  {
+    BoardSafety_Fatal(BOARD_FAULT_TASK_CREATE);
+  }
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -143,10 +143,44 @@ void MX_FREERTOS_Init(void) {
 void StartAppTask(void *argument)
 {
   /* USER CODE BEGIN StartAppTask */
-  /* Infinite loop */
-  for(;;)
+  uint32_t deadline;
+  uint32_t now;
+  uint32_t started;
+  osStatus_t status;
+  (void)argument;
+  AppRuntime_TaskStart();
+  deadline = osKernelGetTickCount() + APP_PERIOD_TICKS;
+  for (;;)
   {
-    osDelay(1);
+    started = DWT->CYCCNT;
+    AppRuntime_BackgroundStep();
+    app_task_last_cycles = (uint32_t)(DWT->CYCCNT - started);
+    if (app_task_last_cycles > app_task_max_cycles)
+    {
+      app_task_max_cycles = app_task_last_cycles;
+    }
+    now = osKernelGetTickCount();
+    if (APP_TIME_REACHED(now, deadline))
+    {
+      app_task_deadline_misses++;
+    }
+    deadline = APP_NEXT_WAKE(now, deadline);
+    status = osDelayUntil(deadline);
+    if (status == osErrorParameter)
+    {
+      /* Tick advanced between the check and delay. Yield one tick, never spin. */
+      app_task_deadline_misses++;
+      if (osDelay(APP_PERIOD_TICKS) != osOK)
+      {
+        BoardSafety_Fatal(BOARD_FAULT_SCHEDULER);
+      }
+      deadline = osKernelGetTickCount();
+    }
+    else if (status != osOK)
+    {
+      BoardSafety_Fatal(BOARD_FAULT_SCHEDULER);
+    }
+    deadline += APP_PERIOD_TICKS;
   }
   /* USER CODE END StartAppTask */
 }

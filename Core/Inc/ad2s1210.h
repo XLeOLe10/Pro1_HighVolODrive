@@ -3,7 +3,27 @@
 
 #include <stdint.h>
 
+/* appTask owns acquisition. TIM1 consumes this complete frame.
+   Timestamps refer to the SAMPLE falling edge. valid describes a position
+   transaction; the AD2S fault bits remain a separate diagnostic policy. */
+typedef struct
+{
+    float position_rad;
+    float speed_rpm;
+    uint32_t sample_cycles;
+    uint32_t sample_tick_ms;
+    uint32_t sequence;
+    uint32_t valid;
+    uint32_t speed_valid;
+    uint32_t fault;
+} AD2S1210_FeedbackSnapshot;
+
+/* Bounded PRIMASK-protected copy, no RTOS call or waiting for the writer. */
+void AD2S1210_GetSnapshot(AD2S1210_FeedbackSnapshot *snapshot);
+
+
 void AD2S1210_Init(void);
+/* Serialized acquisition: Init before scheduling, then only appTask. */
 void AD2S1210_Sample(void);
 void AD2S1210_Run_1kHz(void);
 void AD2S1210_Run_20kHz(void);
@@ -69,5 +89,12 @@ extern volatile uint32_t ad2s_acquisition_last_cycles;
 extern volatile uint32_t ad2s_acquisition_max_cycles;
 extern volatile uint32_t ad2s_acquisition_budget_cycles;
 extern volatile uint32_t ad2s_acquisition_over_budget_count;
+/* Body timing excludes PRIMASK prologue/restore and statistics update.
+   Complete interrupt latency still needs a board measurement. */
+extern volatile uint32_t ad2s_snapshot_max_cycles;
+extern volatile uint32_t ad2s_sample_edge_max_cycles;
+extern volatile uint32_t ad2s_sample_interval_cycles;
+extern volatile uint32_t ad2s_sample_interval_max_cycles;
+extern volatile uint32_t ad2s_sample_gap_count;
 
 #endif

@@ -35,7 +35,8 @@ static uint32_t cal_count;
 static uint32_t sum_u;
 static uint32_t sum_v;
 static uint32_t sum_w;
-static uint8_t monitor_ready;
+static volatile uint8_t monitor_ready;
+volatile uint32_t monitor_sample_sequence = 0U;
 
 static float CurrentMonitor_CodeToAmp(uint16_t raw, float offset)
 {
@@ -64,6 +65,7 @@ void CurrentMonitor_Init(void)
     sum_v = 0U;
     sum_w = 0U;
     monitor_ready = 0U;
+    monitor_sample_sequence = 0U;
 }
 
 uint8_t CurrentMonitor_IsReady(void)
@@ -93,6 +95,7 @@ void CurrentMonitor_Run_20kHz(float electrical_angle_rad)
     }
 
     CurrentSense_GetRaw(&raw_u, &raw_v, &raw_w, &raw_bus);
+    monitor_sample_sequence++; /* TIM1-owned; confirms this iteration consumed a frame. */
     monitor_vbus_v = (float)raw_bus * CURRENT_MONITOR_VREF_V /
                      CURRENT_MONITOR_ADC_FULL_SCALE *
                      CURRENT_MONITOR_BUS_DIVIDER_RATIO;

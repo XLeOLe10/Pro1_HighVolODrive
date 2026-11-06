@@ -31,7 +31,7 @@ void CurrentSense_Init(void)
 
 void CurrentSense_Start(void)
 {
-  /* Arm both injected groups before TIM1 channel 4 starts producing TRGO2. */
+  /* Arm all three injected groups before TIM1 channel 4 produces TRGO2. */
   if (HAL_ADCEx_InjectedStart(&hadc1) != HAL_OK)
   {
     Error_Handler();
@@ -67,7 +67,7 @@ void CurrentSense_GetRaw(uint16_t *iu,
                          uint16_t *vbus)
 {
   *iu = (uint16_t)hadc1.Instance->JDR1;
-  *iw = (uint16_t)hadc1.Instance->JDR2;
+  *iw = (uint16_t)hadc3.Instance->JDR1;
   *iv = (uint16_t)hadc2.Instance->JDR1;
-  *vbus = (uint16_t)hadc3.Instance->JDR1;
+  *vbus = (uint16_t)hadc3.Instance->JDR2;
 }

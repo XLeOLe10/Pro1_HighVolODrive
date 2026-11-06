@@ -8,6 +8,7 @@ void CurrentMonitor_Init(void);
 void CurrentMonitor_Run_20kHz(float electrical_angle_rad);
 uint8_t CurrentMonitor_IsReady(void);
 
+extern volatile uint32_t monitor_sample_sequence;
 extern volatile float monitor_ia_a;
 extern volatile float monitor_ia_adc_a;
 extern volatile float monitor_ib_a;

@@ -1,6 +1,6 @@
 # 001：RTOS 引入前审查与 CubeMX 配置
 
-- 状态：**已原地生成并完成生成后审查；全量编译失败（2 错误、2 警告），RTOS 业务接入尚未完成**。最新结果与后续安排见第 12 节。
+- 状态：**RTOS 最小接入代码已实现，Keil 全量编译通过（0 错误、0 警告）；待实板验收**。生成检查点为 996b818；职责合同、行为变化、内存证据和剩余工作见第 13 节。尚未迁入 ODrive。
 - 创建日期：2026-10-29；最近复查：2026-11-04（Asia/Shanghai）。
 - 工程：D:/stm32H750/High_fengshan/FOC_T；分支：Xiao_ODrive。
 - 审查提交：fd025767ccac1e9b3f7ff10d5b0c36398511bbc1；原始固件基线：48c42eb / v1.0.0。
@@ -208,7 +208,7 @@ Break 当前关闭是现状，不能据此宣称存在 TIM1 硬件过流关断�
 | 文档导入 | 原稿与副本 SHA256 相同；原团队规则保留；争议项进入 spec | PASS：文档检查 |
 | 基线构建 | 对审查提交全量编译，记录工具/命令/结果与 map | PASS：2026-10-29 裸机基线 0 错误 0 警告；不是新 RTOS 代码结果 |
 | .ioc 配置复查 | 与用户最终外设/引脚、TIM1、RTOS 和 IRQ 目标一致，既有源码差异单独列出 | PASS：2026-11-04 生成配置与主要外设实现已核对；应用代码差异和 VOS 变更见第 12 节 |
-| RTOS 构建 | 内核/wrapper/port/heap 各自匹配，无重复 handler；全量编译通过；Flash/RAM 不越界 | FAIL：2026-11-04 全量编译 2 错误、2 警告；未进入成功链接，新固件大小/map 未验证；见第 12 节与构建记录 |
+| RTOS 构建 | 内核/wrapper/port/heap 各自匹配，无重复 handler；全量编译通过；Flash/RAM 不越界 | PASS：第 13 节接入后全量编译0错误0警告；ROM59576 B、RW+ZI25336 B，未越界。第 12 节保留原始生成失败历史 |
 | 双时基 | 调度器启动前后 HAL_GetTick 均每毫秒增长；RTOS tick 1000 Hz；停一个业务任务不停止 HAL tick | NOT_RUN：需要新固件和测量 |
 | 控制时序 | 对照基线测 PWM、TRGO2/ADC、ISR 周期/抖动；无新增控制超期；按实际 49.98 us 周期复核统计阈值与可用预算 | NOT_RUN：当前没有基线波形/WCET 数值 |
 | 后台周期 | 记录采集完成间隔、最大耗时和 deadline miss；无连续追赶造成忙循环；失败和旧数据处理符合确认后的策略 | NOT_RUN；阈值/策略待审阅 |
@@ -227,8 +227,8 @@ Break 当前关闭是现状，不能据此宣称存在 TIM1 硬件过流关断�
 - [x] TIM1 的 PSC/ARR/RCR/CCR4 保持原值；约 20.008 kHz 与标称 20 kHz 的差异仍记录，未修改控制时序。
 - [x] 用户已保存 .ioc，AI 完成生成前配置复查。
 - [x] 用户以 c36ed99 为检查点完成原地生成；AI 完成生成差异审查与全量构建，发现 2 处编译错误及未完成的业务接入。
-- [ ] 按第 12 节修补重复入口、安全启动、ADC 读取、任务业务、数据交接与故障处理，再全量编译。
-- [ ] 实施前细化数据发布、采集超期/固定 dt、启动与异常处理的具体接口和验收阈值；解释取舍并更新本规格。用户明确要求批准或确需其决策时再提出。
+- [x] 按第 13 节修补重复入口、安全启动、ADC 读取、任务业务、数据交接与故障处理；全量编译0错误0警告，硬件验收另计。
+- [x] 第 13 节已落地快照、实际dt、2ms初始软件预算、早到启动拒绝与复位才能清错的策略；2ms合理性和实际时序/余量仍须板测。
 - [ ] 补充真实板卡版本、当前已验证供电/负载/模式、基线 ISR 最坏耗时与波形；缺少这些不妨碍当前 .ioc 审查，但不能宣称上板完成。
 
 回退：生成前检查点为 c36ed99，关键源码与 Keil 配置均已跟踪。按文件/差异恢复需要保留的旧逻辑，不批量放弃用户修改；新增 RTOS 文件单独审查。已共享的提交使用新 revert 提交，不改写同伴历史；v1.0.0 不移动。
@@ -282,7 +282,7 @@ Break 当前关闭是现状，不能据此宣称存在 TIM1 硬件过流关断�
 
 本轮验证：复查 .ioc、手写代码、现有 spec 与本机 Cube 默认；交叉复核优先级/ADC/USART/VOS差异。未运行新的构建或硬件测试。
 
-## 12. 2026-11-04 原地生成后审查与下一步
+## 12. 2026-11-04 原地生成后审查（历史；修复结果见第 13 节）
 
 ### 12.1 范围与证据
 
@@ -338,3 +338,215 @@ Break 当前关闭是现状，不能据此宣称存在 TIM1 硬件过流关断�
 4. 补齐任务/内核创建失败、堆分配失败、栈溢出、断言及已有错误入口的无阻塞关断和诊断。不能只补空函数或用死循环冒充已关断。
 5. 清理额外 VOS/Flash、空构建后动作和按需保留的调试接口；保持算法、协议和无关功能不扩展。
 6. 对修补后的最终差异再次全量编译，检查 Flash/RAM 与实际 heap/stack 落点；通过后才安排用户指定条件的板上时序、余量和故障验证。本次没有执行这些后续源码修改。
+
+## 13. RTOS 最小接入实施（2026-11-04）
+
+### 13.1 本轮授权与职责合同
+
+用户明确要求按上一轮步骤开始执行。开始时 HEAD=996b818（CubeMX生成结果，RTOS业务待接入），Xiao_ODrive 工作区干净。实现只覆盖当前 RTOS 最小接入；不迁入 ODrive、通信协议或新控制算法，不提交/推送/烧录。
+
+- main 的 USER CODE 负责安全初始化和应用初始化；调度器创建/启动失败必须进入故障路径，禁止回落到旧裸机业务循环。
+- 新 app_runtime 模块承接原手写启动、后台与 TIM1 控制胶合代码；原电流/速度 PI 与控制参数保留。StartAppTask 只有一个业务入口，以1ms绝对周期运行旋变/后台，每5ms发送原格式遥测；超期跳过旧周期并记录，不忙追赶。
+- TIM1 ISR 是正常功率 EN/MOE 的唯一操作者。任务只准备PWM通道/引脚并发布prepared，最终在短PRIMASK区复核运行请求、校准、数据有效性、故障锁存后开输出。taskENTER_CRITICAL不能屏蔽IRQ0，因此不用于这份交接。
+- 旋变快照由appTask写、TIM1读，包含角度rad/速度rpm、DWT采样时刻、HAL毫秒时刻、序号、位置有效/速度有效/设备故障位。发布和读取都是有界固定字段拷贝，短PRIMASK区不包含SPI、浮点计算或格式化；ISR不自旋等待任务。
+- 速度使用两次实际采样时刻差分；首次采样、SPI失败后首帧、间隔超过2ms时速度无效并重建差分基础，不能把长间隔冒充1ms。2ms是1ms发布周期+1ms交付余量的初始软件预算，必须通过板测确认，不声称由电机最高转速或安全认证推导。
+- 允许使能需位置与速度快照有效且年龄不超过2ms，并有本控制拍的新ADC帧和校准ready。已经使能时输入无效/超龄/缺ADC帧撤输出并锁存，初版故障仅复位恢复，禁止故障后自动重启。设备AD2S故障位继续单独诊断；原来强制initialized=1会掩盖配置失败，应移除并采用真实回读结果。
+- 反馈/遥测跨上下文读取完整副本，UART静态发送buffer由appTask独占；busy时只计丢帧，不重写在发buffer。
+- 新 board_safety 模块直接撤EN、无条件清MOE；锁存故障另清CH1–3六个CCER使能，保留CH4、计数器与TRGO2配置。Fatal处理不依赖RTOS/HAL等待，覆盖创建失败、malloc、栈溢出、断言、Error_Handler和CPU异常。正常停机保留六路CCER以便下一次明确运行请求；TIM1始终复核fault才能重开输出。
+- 当前只验证GPIO_EN板级方式；没有EN的ALWAYS_ON模式不自动套用此启动方案。软件关断不替代硬件保护，真实电平/延迟及MOE关闭后ADC触发持续性仍须上板验证。
+- 维护FreeRTOS堆剩余/历史最低剩余、appTask最小栈余量、周期超期和ISR耗时诊断；MSP先核对链接预算，真实最坏嵌套余量另测。
+- 将VOS/Flash等待恢复到裸机基线VOS3/4等待周期，保持200MHz与既有PWM参数；同步.ioc，关闭空构建后命令。手写入口放USER CODE或独立模块，避免下次生成重复。
+
+### 13.2 验证计划（执行结果见 13.4）
+
+1. 静态核对单一回调、任务/IRQ调用边界、所有失败入口、ADC映射、任务创建检查、UARTbuffer所有权与故障不可重启；独立复审最终差异。
+2. 对周期回绕/超期、数据年龄、运行许可和故障锁存进行可在本机执行的行为检查；工具条件不足时明确缺口，不把源码搜索称作硬件验证。
+3. Keil全量重建并归档日志与map，检查Flash/RAM、MSP、RTOS堆与静态/动态任务栈。
+4. 板上验收仍NOT_RUN：断开功率时检查两套tick、任务周期、MOE=0时ADC更新；在用户指定条件下检查原控制功能、故障输出、电流/角度方向、最坏ISR与短临界区延迟、栈堆余量。不得因编译通过宣称电机运行通过。
+
+### 13.3 实际修改与行为变化
+
+| 范围 | 最终实现 |
+| --- | --- |
+| 生成入口 | main.c 保留唯一 TIM1/TIM7 回调；USART1 入口/声明唯一；全部手写接入位于 USER CODE，额外的生成区变化只有恢复 VOS3/FLASH_LATENCY_4 |
+| 应用职责 | 新 Core/Src/app_runtime.c 与 app_runtime.h：初始化、任务启动、后台一步、TIM1控制四个入口。原 main 的手写胶合逻辑迁出；open_foc.c/.h、数学库、HAL与FreeRTOS第三方源码逐字节未改 |
+| 周期与任务 | freertos.c 的 StartAppTask 1ms绝对周期；超期重设未来deadline，检查与osDelayUntil间的tick竞争用一次有界osDelay退让；保留5ms两列速度遥测 |
+| 启动 | main校准/AD2S/FOC初始化；task对象创建成功且调度运行后启动ADC→CH4→TIM1。零偏ready后任务准备六路PWM，只有TIM1能最终使能EN/MOE |
+| 早到启动 | 未完成准备/校准或反馈无效时收到run_request，清除请求并计 app_start_rejected_count；就绪后需要新的启动请求，避免没有功率输出时先消耗对齐计时 |
+| 控制链 | 正常路径保持 RotorFeedback→20分频速度环→CurrentMonitor→CurrentFeedback→FOC 顺序；TIM1不调用RTOS；ISR预算统计改为实际9996 CPU cycles（49.98us），PWM/控制参数未改 |
+| ADC | W读ADC3 JDR1、母线读ADC3 JDR2；修正头文件注释；current_monitor增加TIM1拥有的sample_sequence并将ready设volatile，用本拍是否消费新帧参与运行许可 |
+| 快照与测速 | ad2s1210.c/.h 提供32B完整快照、实际DWT间隔测速；HAL毫秒时间同时排除长时间停更导致DWT整圈混淆；首帧/恢复首帧/超预算帧速度无效，保持真实状态 |
+| 功率与故障 | 新board_safety模块：正常STOP撤EN/MOE，锁存FAULT另清六路CCER，保留CH4与计数；栈/堆/断言/内核/任务创建/初始化/CPU异常均接入。初版FAULT只允许MCU复位清除，不提供运行中清错API |
+| 工程 | Keil新加app_runtime.c、board_safety.c，原模块保留，53个源码条目存在且唯一；空AfterMake命令关闭；.ioc与main恢复基线VOS3 |
+| 验证策略 | app_policy.h集中周期、年龄与许可宏；tests/rtos_policy_compile_checks.c含85个编译期场景（64种许可组合、19个时间/回绕场景、2个布局/预算检查） |
+
+关键新行为必须在上板前理解：
+
+- AD2S配置失败会真正阻止启动，不再无条件把initialized设为1。实际条件包括配置事务成功、CONTROL=0x7F、EXC低7位=0x28和原四个阈值回读一致；这可能暴露旧调试代码曾掩盖的通信问题。未新增传感器物理阈值。
+- 已使能时，旋变事务无效/速度无效/年龄超2ms或本控制拍缺ADC帧会立即撤销软件输出并锁存；再次写run_request不能绕过fault，需先排查再复位。
+- AD2S硬件故障位仍为诊断-only，尚未实现完整旋变/母线/过流等保护状态机；本次代码成功不代表功率级保护已经齐全。
+- 当前只支持既有GPIO_EN方式或完全禁用输出；ALWAYS_ON编译拒绝，因为没有EN时需要重新论证准备PWM期间的安全行为。
+- SPI超时仍保持原HAL 10ms上界。控制侧按2ms预算独立拒绝陈旧数据；任务返回后记录超期并重建测速基准，不会把超时误当一个1ms样本。
+- 临界区统计量记录主体，并非完整关中断/IRQ响应延迟。反汇编已确认快照复制中有PRIMASK保存/恢复与固定拷贝，无调用/等待循环；最坏延迟必须板测。
+
+### 13.4 已执行验证和真实内存账单
+
+证据：[接入后构建与静态验证记录](../validation/001-rtos-integration-build.txt)。
+
+- BUILD PASS：ARMCC5.06u7 build960 / Keil全量重建，0 Error(s)、0 Warning(s)，2分55秒。生成了新.axf/.hex。
+- 源码审查 PASS：独立复审最终启动/数据/使能/失败路径；四个入口各一份；生成区域比较确认main/freertos/it/FreeRTOSConfig的手写接入在USER CODE内，时钟恢复作为明确例外。
+- 编译期场景 PASS：使用现有ARMCC编译85个生产策略宏场景；不是执行MCU或RTOS。未在PATH/常见位置找到原生Windows C编译器，未下载工具，未把编译期检查称作本机运行测试。
+- 反汇编审查 PASS：AD2S1210_GetSnapshot/PublishSnapshot有CPSID、8字段拷贝、DMB和保存值恢复PRIMASK；MOE关断为无条件寄存器清位，未使用受CC4E影响的条件宏。
+- HOST执行 / HW：NOT_RUN。数据交错实测、真故障注入、PWM/ADC时序、物理停机及内存余量未执行。
+- 在当前200MHz时钟下，板上必须测最大控制执行时间与IRQ延迟；两者总预算不能超过实际约49.98us的控制周期，并需确认真实PWM更新截止点。仅看平均耗时不足。
+
+| 内存项目 | 本次map结果 |
+| --- | --- |
+| Flash ROM总量 | 59576 B，58.18 KiB / 128 KiB；相对裸机基线增加13292 B |
+| RW+ZI总量 | 25336 B，24.74 KiB，全部在AXI RAM；DTCM区域本次分配0 |
+| FreeRTOS ucHeap | 0x240012F8，16384 B；动态appTask的4096 B栈及TCB从此池分配，不再额外加算4096 B静态RAM |
+| MSP | 0x240052F8–0x240062F8，4096 B；初始SP=0x240062F8 |
+| Idle / Timer静态内存 | Idle栈512 B、TCB92 B；Timer栈1024 B、TCB92 B，均在AXI RAM |
+| C库堆 | startup仍配置512 B，但本次链接器剔除了未使用的HEAP段，因此没有实际占用；与RTOS堆分开 |
+| 运行余量 | app_stack_min_free_bytes、app_heap_free_bytes、app_heap_min_free_bytes已接入诊断，需运行后读取；编译时不能填入“剩余足够”的结论 |
+
+调用图虽显示全局最大424 B、StartAppTask已知链216 B，但同时明确包含Unknown(Cycles, Untraceable Function Pointers)，也未覆盖真实异常嵌套。不能据此缩减4KiB任务栈/MSP或宣称余量已验收。
+
+### 13.5 交给用户的后续验证顺序
+
+1. 先审阅本节与代码差异，按既定手动Git流程保存代码接入版本；当前没有自动提交/推送。
+2. 先在功率输出隔离条件下检查：初始化结果、两套tick、app_task_iterations增长；foc_run_request保持0，EN低/MOE=0时monitor_sample_sequence继续增长并完成零偏；这验证关输出没有误停ADC触发。
+3. 读取board_fault_mask/board_first_fault/board_fault_ipsr定位失败；若初始化失败，结合ad2s_init_status和寄存器回读排查，不直接把initialized/fault改成“正常”来绕过检查。
+4. 检查新鲜度、app_task_deadline_misses、app_start_rejected_count、ISR最大耗时、临界区测量与堆栈余量。首次未到诊断周期时app_stack_min_free_bytes为0，不能误判已溢出。
+5. 根据用户明确提供的板卡、供电、限流、负载和测量条件安排原控制功能与故障验证；本轮没有代为烧录或上电。完成此基线后再选择ODrive第一个小模块，当前可以并行做源码/接口对照。
+
+## 14. 2026-11-05 首轮实板检查说明（检查方法；首批结果见第15节）
+
+### 14.1 本轮边界和准备
+
+用户请求指导如何检测。本轮只核对源码/构建指纹、调试设置和准备检查表，不下载、不启动调试、不连接电源。现源码与上一轮成功构建的21项指纹全部一致；Git仍未提交本轮接入改动，HEAD=996b818。
+
+硬件状态：用户已确认“功率母线已断开，仅控制与传感器供电”。这是用户报告的接线状态；本节编写时尚无实测结果，后续截图观察见第15节。以下首次运行步骤还要求储能按现有硬件规程确认已释放、控制与传感器按板卡既定方式供电。foc_run_request=0仅是软件请求，不替代功率隔离。
+
+现Keil目标是真实ST-Link目标（不是模拟器），启用了Load Application/Run to main和UpdateFlashBeforeDebugging。因此进入调试可能触发下载/运行初始化，不能视为纯查看动作。用户已报告上述隔离供电条件；本轮由用户按下述步骤操作，助手未执行下载/运行。
+
+### 14.2 在上述条件满足后的Keil操作
+
+1. 打开现有 MDK-ARM/FOC_T.uvprojx，target选择FOC_T。现产物已核对来自0错误0警告构建；若用户又修改源码，需重新构建并确认通过后使用新产物。
+2. 用Debug → Start/Stop Debug Session（Ctrl+F5）进入调试，确认加载当前工程产物；失败时保存Keil完整下载/连接错误。
+3. 暂停在main时打开View → Watch Windows → Watch 1，加入下表变量。启用View → Periodic Window Update，采用运行中观察。静态变量找不到时可在View → Symbols定位并加入；不要为了读数在Watch调用函数或写赋值表达式。
+4. 本轮保持foc_run_request=0。确认没有测试断点后按Run（F5），连续运行约10秒，再在不暂停CPU的情况下间隔约5秒记录两次读数。
+5. 若故障码非0、输出标志意外为1、或计数不增长，停止本轮判定并回报读数。初始化失败时可在已隔离功率条件下暂停查看当前位置/调用栈，不能改状态变量绕过失败。
+6. 若中途打断点、单步、暂停或重新下载，丢弃这段时序统计，从复位后的连续运行重新记录。暂停会改变外设/CPU/DWT/软件tick的相对行为。
+
+### 14.3 Watch 1：启动、调度和采样
+
+| 变量 | 预期 / 含义 | 实测 |
+| --- | --- | --- |
+| foc_run_request | 始终0，本轮不请求启动 | 待测 |
+| board_output_enabled | 始终0；仅是软件状态，不代替实际EN/MOE确认 | 待测 |
+| board_fault_mask | 正常启动后0；非0则记录十六进制值 | 待测 |
+| ad2s_initialized | 初始化后1；若0且fault=0x80，检查初始化回读 | 待测 |
+| uwTick | HAL的毫秒计数，应持续增长 | 待测 |
+| xTickCount | FreeRTOS的tick计数，应持续增长；比较增量，不要求与uwTick数值相等 | 待测 |
+| app_task_iterations | 后台循环计数持续增长，正常约1000次/秒 | 待测 |
+| monitor_sample_sequence | 新ADC帧计数持续增长，正常约20008次/秒；MOE低时也应继续采样 | 待测 |
+| monitor_ready | ADC零偏校准结束后1；静态变量位于current_monitor.c | 待测 |
+| ad2s_position_data_valid | 周期位置读取正常时1；不等于所有设备故障位均正常 | 待测 |
+
+初始化含HAL延时，特殊诊断路径可多等约1秒；零偏约6096个采样，即采样启动后约0.305秒，不能从按F5的瞬间直接计这个时间。运行稳定后，两次读数相隔约5秒时，两个tick各约增5000，后台约增5000，ADC约增100040。手动计时/窗口刷新只是连通性粗检，不是频率或抖动精测。
+
+若正常Watch无法解析xTickCount/monitor_ready，报告提示或从Symbols找到对应tasks.c/current_monitor.c变量；不要在运行中调用osKernelGetTickCount()/CurrentMonitor_IsReady()替代观察。
+
+### 14.4 Watch 2：第一轮通过后看余量与时序
+
+| 变量 | 判读方式 |
+| --- | --- |
+| app_stack_min_free_bytes | 每约1秒更新，单位字节；启动首秒内0不代表已经溢出。记录具体值，不能仅凭大于0就认为余量合格 |
+| app_heap_free_bytes / app_heap_min_free_bytes | 当前/历史最低剩余字节；记录两者，不按16KiB直接推断运行后剩余 |
+| foc_isr_budget_cycles | 当前9996，200MHz下49.98us |
+| foc_isr_max_cycles / foc_isr_overrun_count | 无暂停的一段运行中看最大耗时、超预算计数；cycles/200得到微秒。仅函数内部耗时不包含完整异常进出和最坏IRQ延迟；run_request=0的路径较轻，不能代表真实闭环运行的最坏耗时 |
+| app_task_deadline_misses | 稳态观察是否持续增长；若增长，结合后台/采样最大耗时调查，不直接放宽预算 |
+| app_task_max_cycles / ad2s_acquisition_max_cycles | 后台/采样耗时；cycles/200转微秒，周期仍由实际tick/DWT记录核对 |
+| ad2s_sample_gap_count / ad2s_spi_error_count | 稳态新增长说明采样间隔或通信存在问题 |
+| app_adc_missed_count / app_feedback_invalid_count | 初始化可能已有计数；记录稳定运行区间的增量，不机械要求启动累计值为0 |
+| app_critical_max_cycles / ad2s_snapshot_max_cycles | 屏蔽区主体统计；完整最大IRQ延迟仍需其他测量，不能直接等同这两个值 |
+
+若board_fault_mask非0，追加board_first_fault、board_fault_ipsr。0x80对应传感器初始化不满足，可再读ad2s_init_status、ad2s_control_readback、ad2s_exc_readback、ad2s_threshold_config_status。HAL_OK状态值为0，成功布尔标志ad2s_initialized为1，二者含义不同。
+
+本轮不修改foc_run_request为1，不做故障注入，不测试带电旋转或动态断点。必须先得到本表读数和实际硬件条件，再安排下一轮验证。
+
+资料核对：Keil [Debug菜单](https://www.keil.com/support/man/docs/uv4cl/uv4cl_ui_debug.htm)、[Watch窗口](https://www.keil.com/support/man/docs/uv4/uv4_db_dbg_watchwin.asp)、[启动调试](https://www.keil.com/support/man/docs/uv4/uv4_db_dbg_startdebug.asp)。本节编写时实测状态为NOT_RUN；后续执行结果以第15节为准，未覆盖项目仍待验证。
+
+
+## 15. 2026-11-05 用户实板截图复核（初步运行检查通过，完整验收待完成）
+
+### 15.1 条件、证据与结论边界
+
+用户前一轮确认功率母线断开，仅控制与传感器供电；本轮表示未按固定秒数记录，连续放置一段时间后提供两张Keil Watch截图。截图1文件名为codex-clipboard-892be96e-4287-44d0-93ed-5541ec304ea3.png，截图2为codex-clipboard-1d6848ae-bf45-442a-b23a-943e414d651f.png。下面转录可见数值，不把两张图当成严格同步快照。
+
+结论：所示运行状态支持“母线断开、未请求输出的首次启动/调度/采样基本检查通过”。未发现所示诊断量报告故障或内存紧张。尚无连续两次计数差、独立墙钟/波形测量、完整运行日志或板上程序指纹回读，因此不将单次截图等同于持续稳定性、精确频率、最坏时序或全部保护验收通过。
+
+助手本轮只核对源码和截图、更新本spec；未修改固件、重新构建、下载、运行调试或提交Git。当前分支Xiao_ODrive，接入改动仍未提交；用户调试引起的MDK-ARM/FOC_T.uvoptx修改保留。
+
+### 15.2 截图1：启动与计数
+
+| 变量 | 截图十六进制值 | 十进制 / 判读 |
+| --- | --- | --- |
+| foc_run_request | 0x00 | 0，未请求电机启动 |
+| board_output_enabled | 0x00 | 0，软件输出许可关闭；不是实际EN/PWM电平测量 |
+| board_fault_mask | 0x00000000 | 0，没有锁存故障；停机时部分输入异常只累计诊断，不据此推断全部输入始终有效 |
+| ad2s_initialized | 0x01 | 1，初始化标志通过 |
+| uwTick | 0x0000A643 | 42563 |
+| app_task_iterations | 0x0000A19D | 41373 |
+| monitor_sample_sequence | 0x000CA1A0 | 827808 |
+| ad2s_position_data_valid | 0x01 | 1，该观察时刻位置读取有效，不代替速度新鲜度/设备故障位检查 |
+| monitor_ready | 0x01 | 1，零偏校准流程完成，不代表零偏绝对精度已测 |
+| xTickCount | 0x0000A19F | 41375 |
+
+按当前1000Hz tick换算，RTOS累计计时约41.375s，HAL约42.563s；这是软件计时换算，非独立实测墙钟时长。HAL领先1188 tick，与HAL先启动及初始化延时相容，不凭差值认定时钟漂移。后台41373次与RTOS41375 tick接近，ADC帧/tick=827808/41375≈20.0074，与约20.008kHz采样和1kHz tick的设计关系相符。这是累计量的一致性检查；Watch刷新并非跨变量原子快照，仍需稳态增量确认。
+
+### 15.3 截图2：内存余量和已记录耗时
+
+| 变量 | 截图值 | 换算及判读 |
+| --- | --- | --- |
+| app_stack_min_free_bytes | 0x00000E20 | 3616 B，约占appTask 4096 B栈的88.3%；高水位估算在已执行路径下余量较大 |
+| app_heap_free_bytes | 0x00002F88 | 12168 B，RTOS堆当前剩余 |
+| app_heap_min_free_bytes | 0x00002F88 | 12168 B，RTOS堆历史最低剩余，约占16384 B的74.3% |
+| foc_isr_max_cycles | 0x0000113A | 4410 cycles；按当前200MHz换算22.05us，占9996 cycles预算约44.1% |
+| foc_isr_overrun_count | 0x00000000 | 0，当前统计未记录控制函数超预算 |
+| app_task_deadline_misses | 0x00000000 | 0，当前统计未记录后台任务超期 |
+| ad2s_spi_error_count | 0x00000000 | 0，当前统计未记录SPI错误 |
+
+对应实现：Core/Src/app_runtime.c的AppRuntime_BackgroundStep以uxTaskGetStackHighWaterMark乘sizeof(StackType_t)给出字节余量，并读取heap_4当前/最低剩余；AppRuntime_FastISR在函数内部记录DWT周期差。Core/Src/current_monitor.c的CurrentMonitor_Run_20kHz只在获取新ADC帧后增加monitor_sample_sequence。
+
+这些内存量分别是appTask栈和FreeRTOS堆，不覆盖MSP中断栈、其他任务栈或全部MCU RAM。两项堆余量相等与当前固定分配方式相容，不能单凭一帧证明无泄漏。保持现有栈堆分配，暂不缩减。
+
+22.05us仅为本次未请求功率输出路径下已记录的函数内部最大值，不包含完整异常进出/所有IRQ延迟，也不代表真实闭环/故障路径的最坏值。截图未提供是否中途暂停的完整记录，因此时序结论保留此限制。
+
+### 15.4 最小补测与仍待完成项
+
+保持母线断开、foc_run_request=0，在连续运行且不暂停/单步的条件下，记录两次同一组Watch；不必精确掐5秒，可用xTickCount的差值作相对时间基准。观察uwTick与xTickCount增量接近、app_task_iterations增量与xTickCount接近、monitor_sample_sequence增量约为xTickCount的20.008倍；该方式仍不是独立绝对频率测量。
+
+追加app_adc_missed_count、app_feedback_invalid_count、ad2s_sample_gap_count并记录两次值。启动期允许已有累计值，关注稳态是否继续增加。即使board_fault_mask=0，停机期间的反馈/采样缺帧仍可能只计入这些诊断；首次两张截图未提供它们的读数；用户随后补充的读数与观察见15.5，按实际证据更新判定。
+
+尚待：反馈新鲜度及旋变设备故障位、实际EN/MOE/PWM与ADC触发波形、ADC量值/极性、完整IRQ延迟、MSP和最坏任务路径栈余量、真实故障关断以及受控条件下原闭环功能。完成上述软件增量补测后再安排下一轮硬件验证，不以本次截图作为接通高压母线的依据。
+
+
+### 15.5 启动反馈计数补测（用户观察）
+
+用户提供截图codex-clipboard-7df86666-3f14-4ed1-96fa-4f407c5aee11.png，并说明第二项“刚运行开始变了一下，后面就没变化了”。沿用其已报告的功率母线断开、仅控制与传感器供电条件。
+
+| 变量 | 截图值 | 用户报告与判读 |
+| --- | --- | --- |
+| app_adc_missed_count | 0x00000000 | 0，未记录ADC缺帧 |
+| app_feedback_invalid_count | 0x00000016 | 22，用户观察仅启动时增加，之后稳定 |
+| ad2s_sample_gap_count | 0x00000000 | 0，未记录旋变采样间隔异常 |
+
+源码依据：Core/Src/app_runtime.c:253–258每次TIM1检查位置有效、速度有效和新鲜度，任一不满足就增加app_feedback_invalid_count；此值不是SPI错误次数。Core/Src/ad2s1210.c:181–188的首次位置采样只建立差分基准，speed_valid保持0；取得下一次有效位置及合理采样间隔后才可发布有效速度。
+
+因此，启动时高频控制先运行、速度需要至少两次有效位置才能形成，与这次“短暂累加后稳定”的现象相容。22个约49.98us检查拍折合约1.10ms的检查量，不代表已精确测得一段连续1.10ms的无效窗口，也不能据此唯一归因于首次测速。启动次数无需固定为22，不修改有效性门槛或清零掩盖计数。
+
+判定：依据截图和用户连续观察，当前未观察到持续反馈无效、ADC缺帧或旋变采样间隔异常；此项初步观察可接受。有效判定的前提是同时看到app_task_iterations/monitor_sample_sequence等运行计数继续增长，排除CPU暂停或Watch未刷新的假象。本次补图未包含这些运行计数的前后值，精确周期增量及完整时序验收仍待完成。
+
+本次仅更新spec记录，固件不变。检查发现用户已暂存当前集成改动；助手不改暂存区，本节新记录在工作区，用户提交前需将最新spec重新暂存。
