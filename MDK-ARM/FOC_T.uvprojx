@@ -395,6 +395,16 @@
           <GroupName>Application/User/Core</GroupName>
           <Files>
             <File>
+              <FileName>axis_command_core.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/axis_command_core.c</FilePath>
+            </File>
+            <File>
+              <FileName>axis_command.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/axis_command.c</FilePath>
+            </File>
+            <File>
               <FileName>axis_status.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Core/Src/axis_status.c</FilePath>

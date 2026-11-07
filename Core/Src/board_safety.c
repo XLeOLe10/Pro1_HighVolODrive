@@ -31,6 +31,7 @@ static void GateInactive(void)
     MODIFY_REG(BOARD_GATE_EN_GPIO_PORT->PUPDR, 3UL << shift, 0U);
     MODIFY_REG(BOARD_GATE_EN_GPIO_PORT->MODER, 3UL << shift, 1UL << shift);
 #endif
+
 }
 
 void BoardSafety_DisableOutputs(void)

@@ -2,6 +2,7 @@
 #include "app_runtime.h"
 #include "app_policy.h"
 #include "axis_status.h"
+#include "axis_command.h"
 #include "board_config.h"
 #include "board_safety.h"
 #include "current_sense.h"
@@ -17,7 +18,6 @@
 
 #define CURRENT_LOOP_UQ_FF_NORM      0.0f
 #define RESOLVER_TEST_UQ_NORM        0.02f
-#define SPEED_LOOP_TARGET_RPM        50.0f
 #define RESOLVER_DYNAMIC_TEST_LOCKOUT 0U
 
 /* Device fault bits remain diagnostic-only. Transport/age validity is enforced.
@@ -164,7 +164,8 @@ void AppRuntime_Init(void)
     OpenFOC_Init();
     OpenFOC_SetUqVoltageNorm(CURRENT_LOOP_UQ_FF_NORM);
     foc_uq_open_loop_norm = RESOLVER_TEST_UQ_NORM;
-    OpenFOC_SetTargetRPM(SPEED_LOOP_TARGET_RPM);
+    AxisCommandPort_Init();
+    OpenFOC_ApplyCommand(NULL);
     /* Actual center-aligned period = 2*ARR*(PSC+1) CPU clocks (both 200 MHz). */
     foc_isr_budget_cycles = 2U * htim1.Init.Period * (htim1.Init.Prescaler + 1U);
     feedback_age_limit_cycles = (SystemCoreClock / 1000U) * APP_FEEDBACK_MAX_AGE_MS;
@@ -228,6 +229,8 @@ void AppRuntime_BackgroundStep(void)
 void AppRuntime_FastISR(void)
 {
     AD2S1210_FeedbackSnapshot snapshot;
+    const AxisCommandFrame *command_frame;
+    uint8_t command_permit;
     uint32_t started = DWT->CYCCNT;
     uint32_t before;
     uint32_t now_ms;
@@ -267,16 +270,14 @@ void AppRuntime_FastISR(void)
         BoardSafety_LatchFault(BOARD_FAULT_FEEDBACK);
         foc_run_request = 0U;
     }
-    /* A request made before preparation/data readiness is rejected, not
-     * queued. This prevents alignment time elapsing with power still off. */
-    if ((foc_run_request != 0U) && (board_output_enabled == 0U) &&
-        !APP_CAN_ENABLE(foc_run_request, power_pwm_prepared,
+    /* Whole command handoff precedes every slow/fast control calculation.
+     * START before readiness is rejected now, never deferred into auto-start. */
+    command_frame = AxisCommandPort_BeginCycle(now_ms,
+        (uint32_t)APP_CAN_ENABLE(1U, power_pwm_prepared,
             CurrentMonitor_IsReady(), feedback_ok, board_fault_mask,
-            resolver_dynamic_test_lockout_active))
-    {
-        foc_run_request = 0U;
-        app_start_rejected_count++;
-    }
+            resolver_dynamic_test_lockout_active));
+    command_permit = (uint8_t)(command_frame != NULL);
+    OpenFOC_ApplyCommand(command_frame);
     if (board_fault_mask == 0U)
     {
         OpenFOC_SetRotorFeedback(snapshot.position_rad, snapshot.speed_rpm, feedback_ok);
@@ -295,7 +296,7 @@ void AppRuntime_FastISR(void)
     {
         app_adc_missed_count++;
     }
-    if ((board_output_enabled != 0U) || (foc_run_request != 0U))
+    if ((board_output_enabled != 0U) || (command_permit != 0U))
     {
         uint32_t reason = 0U;
         if (feedback_ok == 0U) reason |= BOARD_FAULT_FEEDBACK;
@@ -303,7 +304,9 @@ void AppRuntime_FastISR(void)
         if (reason != 0U)
         {
             BoardSafety_LatchFault(reason);
-            foc_run_request = 0U;
+            AxisCommandPort_RejectActive(AXIS_CMD_FAULT);
+            command_permit = 0U;
+            OpenFOC_ApplyCommand(NULL);
         }
     }
 
@@ -312,10 +315,13 @@ void AppRuntime_FastISR(void)
         /* All control-state writes stay in this ISR after startup. */
         OpenFOC_SetCurrentFeedback(monitor_id_a, monitor_iq_a,
             (uint8_t)((CurrentMonitor_IsReady() != 0U) && (sample_ok != 0U)));
+        OpenFOC_EnforceCommandLimit();
         OpenFOC_Run_20kHz();
     }
 
     /* Observe existing prerequisites. This diagnostic has no control authority. */
+    if (axis_command_configured == 0U) status_inhibits |= AXIS_INHIBIT_COMMAND_CONFIG;
+    if (command_permit == 0U) status_inhibits |= AXIS_INHIBIT_NO_COMMAND;
     if (power_pwm_prepared == 0U) status_inhibits |= AXIS_INHIBIT_PWM_NOT_PREPARED;
     if (CurrentMonitor_IsReady() == 0U) status_inhibits |= AXIS_INHIBIT_CURRENT_OFFSETS;
     if (snapshot.valid == 0U) status_inhibits |= AXIS_INHIBIT_POSITION;
@@ -329,7 +335,12 @@ void AppRuntime_FastISR(void)
     saved = __get_PRIMASK();
     __disable_irq();
     critical_started = DWT->CYCCNT;
-    allow = (uint8_t)APP_CAN_ENABLE(foc_run_request, power_pwm_prepared,
+    command_permit = (uint8_t)AxisCommandPort_FinalPermit(HAL_GetTick());
+    if (command_permit == 0U)
+    {
+        status_inhibits |= AXIS_INHIBIT_NO_COMMAND;
+    }
+    allow = (uint8_t)APP_CAN_ENABLE(command_permit, power_pwm_prepared,
         CurrentMonitor_IsReady(), (uint8_t)(feedback_ok && sample_ok),
         board_fault_mask, resolver_dynamic_test_lockout_active);
     BoardSafety_SetOutputsEnabled(allow);
@@ -340,6 +351,9 @@ void AppRuntime_FastISR(void)
     __DMB();
     RecordCriticalCycles(critical_started);
     __set_PRIMASK(saved);
+    /* Any final expiry/fault already removed hardware permission. Reset PI
+     * outside PRIMASK; TIM1 still owns these private control variables. */
+    if (command_permit == 0U) OpenFOC_ApplyCommand(NULL);
 
     elapsed = (uint32_t)(DWT->CYCCNT - started);
     foc_isr_last_cycles = elapsed;

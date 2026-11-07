@@ -2,6 +2,7 @@
 #define __OPEN_FOC_H
 
 #include <stdint.h>
+#include "axis_command_core.h"
 
 typedef enum
 {
@@ -14,7 +15,9 @@ void OpenFOC_Init(void);
 void OpenFOC_Run_20kHz(void);
 void OpenFOC_Run_1ms(void);
 void OpenFOC_Ramp_1ms(void);
-void OpenFOC_SetTargetRPM(float rpm);
+/* TIM1-only after startup; frame already validated by command boundary. */
+void OpenFOC_ApplyCommand(const AxisCommandFrame *frame);
+void OpenFOC_EnforceCommandLimit(void);
 void OpenFOC_SetVoltageNorm(float uq_norm);
 void OpenFOC_SetUqVoltageNorm(float uq_norm);
 void OpenFOC_SetRotorFeedback(float resolver_angle_rad,
@@ -24,6 +27,7 @@ void OpenFOC_SetIdFeedback(float id_a, uint8_t valid);
 void OpenFOC_SetCurrentFeedback(float id_a, float iq_a, uint8_t valid);
 void OpenFOC_Stop(void);
 
+/* Diagnostic command mirrors. Direct Watch edits do not grant a run. */
 extern volatile uint8_t foc_run_request;
 extern volatile FOC_ControlState foc_control_state_request;
 extern volatile FOC_ControlState foc_control_state_active;
