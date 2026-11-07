@@ -1,0 +1,77 @@
+003 Pure-C architecture baseline verification - 2026-11-06 Asia/Shanghai
+Repository: D:\stm32H750\High_fengshan\FOC_T
+Branch: Xiao_ODrive
+HEAD: 1668486ef7eaa77321968a0619d23bcdd5822162
+Scope: architecture audit/documents/diagrams only. Existing 002 implementation retained.
+No firmware source/configuration edits in this architecture-documentation step.
+No download, debug run, hardware operation, staging, commit, push or merge performed.
+
+BUILD PASS: full Keil rebuild, target FOC_T, exit 0.
+Command: D:\UV4\UV4.exe -r "D:\stm32H750\High_fengshan\FOC_T\MDK-ARM\FOC_T.uvprojx" -t FOC_T -o "D:\stm32H750\High_fengshan\FOC_T\MDK-ARM\FOC_T\architecture-baseline-20261106.log"
+Launched with Start-Process -WindowStyle Hidden; waited for process completion.
+*** Using Compiler 'V5.06 update 7 (build 960)', folder: 'D:\ARM\ARMCC\Bin'
+Rebuild target 'FOC_T'
+Program Size: Code=58916 RO-data=796 RW-data=712 ZI-data=24632
+"FOC_T\FOC_T.axf" - 0 Error(s), 0 Warning(s).
+Build Time Elapsed:  00:02:59
+
+Language/build: ARMCC 5.06 update 7 build 960, C99 + GNU extensions.
+53 C sources + 1 assembly source; no C++ target source.
+Actual object flags: --cpu Cortex-M7.fp.dp --c99 --gnu -O0 --debug --split_sections.
+MicroLIB enabled; fromelf build attributes report Tag_ABI_VFP_args = 1.
+The 27 / 85 separate compile-time checks remain previous 002 / 001 evidence;
+they were not rerun as part of this documentation-only full-target build.
+
+Memory evidence from the newly rebuilt map:
+    ucHeap                                   0x240012fc   Data       16384  heap_4.o(.bss)
+    axis_status_word                         0x24000000   Data           4  axis_status.o(.data)
+    __initial_sp                             0x24006300   Data           0  startup_stm32h750xx.o(STACK)
+  Load Region LR_IROM1 (Base: 0x08000000, Size: 0x0000ec08, Max: 0x00020000, ABSOLUTE, COMPRESSED[0x0000e9a4])
+    Execution Region ER_IROM1 (Exec base: 0x08000000, Load base: 0x08000000, Size: 0x0000e940, Max: 0x00020000, ABSOLUTE)
+    Execution Region RW_IRAM1 (Exec base: 0x20000000, Load base: 0x0800e940, Size: 0x00000000, Max: 0x00020000, ABSOLUTE)
+    Execution Region RW_IRAM2 (Exec base: 0x24000000, Load base: 0x0800e940, Size: 0x00006300, Max: 0x00080000, ABSOLUTE, COMPRESSED[0x00000064])
+    Total RO  Size (Code + RO Data)                59712 (  58.31kB)
+    Total RW  Size (RW Data + ZI Data)             25344 (  24.75kB)
+    Total ROM Size (Code + RO Data + RW Data)      59812 (  58.41kB)
+Flash configured: 0x08000000, 128 KiB.
+DTCM configured: 0x20000000, 128 KiB, used 0 B.
+AXI SRAM configured: 0x24000000, 512 KiB, RW+ZI 25344 B.
+ROM 59812 B = code+RO 59712 B + compressed RW initialization image 100 B.
+Uncompressed RW data size is 712 B; do not double-count compressed and uncompressed images.
+RTOS heap_4: 16384 B at 0x240012FC.
+appTask stack: 4096 B allocated inside RTOS heap at runtime; not extra static RAM.
+MSP stack: 0x24005300 through 0x24006300 (end exclusive), 4096 B.
+Idle/Timer static stacks: 512/1024 B; TCBs 92 B each.
+Startup C heap configured 512 B; unused HEAP removed by linker.
+
+Artifact discrepancy preserved:
+At the start of this audit, 11 of 12 fingerprints in 002 matched (including all 10
+listed source/configuration/test files and map); AXF did not match.
+002 archived AXF: 8A4BE63986A7A1ACBFAE0A2A7B320E3217BDF00CA4C515E1835B38C7E00FC2A9
+Pre-rebuild AXF: FF35AB6CC342C4B2F48B212DB464DF44E09734AB9525D12B3FA388C32AACD341
+Cause not established. No claim that the discrepancy was merely debug metadata.
+This full rebuild establishes a new AXF/map/log fingerprint set below.
+All 10 source/configuration/test fingerprints from 002 still match after this rebuild.
+
+HW: NOT_RUN for 002/new003 rebuilt artifacts.
+Prior user screenshots are limited 001/1668486 observations with power bus disconnected.
+No claim of verified PWM gate waveform, closed-loop operation, worst-case stack/latency,
+ADC/angle phase alignment, real fault shutdown delay, or maximum-speed angle accuracy.
+Proposed command mailbox/epoch/timing contracts in 003 are NOT_IMPLEMENTED.
+PNG/SVG diagrams visually inspected; renderer text-width checks passed.
+
+SHA256 after full rebuild:
+Core/Inc/axis_status.h 16A8FAEBE42F2C60550CB3B1C031F6C36C6158AF4DB386A259F5E6E2FA7D1CCD
+Core/Src/axis_status.c 097424EF92A573DC910BAEE11B4DD95CAE4C043408A18AECD9E63A050E332CDB
+Core/Src/app_runtime.c 47244C6CE86890125A4DBAC3D432273B2D3574B7C2CF2EAD07B5F5A2445E6839
+Core/Src/board_safety.c E6E1EF42231AB7D4F8EC94102D50B15D5888C6988DACBCF54E63FBD37FE533A7
+Core/Inc/board_config.h 45CD5064D287016050085125276B9B1E89FB7D13B0740B291B2AC1A9C1FCD8E9
+Core/Inc/app_policy.h D3BE7141AA698C1E1CB85B5871671C5A2A1B9FDE77F2BD535407FB6CF1CCFED8
+Core/Src/open_foc.c 0FB215F8F73586DEF1D2A805458FE35106A1AE6DA1F37EB46080D172D5A4BF82
+FOC_T.ioc 1B9D96EB09DB1B3FDB995B8AF08CB483500C65745A033B7930A284371DC5F334
+MDK-ARM/FOC_T.uvprojx 01C81425064EB87D4B305C4BCEE539EA354D6AF5A43242491370A0C6AE2670D0
+tests/axis_status_compile_checks.c 0C5A722ADDE2054024FDBD936D87B9B006440CA653CA05B5A8B81D26F20B12DF
+MDK-ARM/FOC_T/FOC_T.axf 2B66DA04348820D688DAD6B107DED802A245F2511E52CAA75C7B567DD970D9A5
+MDK-ARM/FOC_T/FOC_T.map D129330F397252622929915E95A7584B1665ED66077EB0226633EF27E1E76D6D
+MDK-ARM/FOC_T/FOC_T.sct 1CD561D34115CB611838E3C46A3073336004F0EE0DB6185CE1CD10E8EE168235
+MDK-ARM/FOC_T/architecture-baseline-20261106.log E5E511F3110C4D529CA39EE8CFBCD47BDB4CFFA26C06F9E95A763078129C96E9

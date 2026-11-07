@@ -3,13 +3,14 @@
 
 /*
  * PB10 is the active-high common enable for all gate drivers. It is held low
- * during startup/current-offset calibration. Once the offsets are valid, the
- * six TIM1 PWM outputs are started first and PB10 is then driven high.
+ * during startup/current-offset calibration. appTask prepares the six PWM
+ * channels after offset calibration; TIM1 alone enables PB10/MOE after checking
+ * an explicit run request, fresh inputs and no latched fault.
  *
  * Supported modes:
- *   BOARD_POWER_STAGE_DISABLED  - safe default; no six power PWM outputs
+ *   BOARD_POWER_STAGE_DISABLED  - no six power PWM outputs
  *   BOARD_POWER_STAGE_GPIO_EN   - use a GPIO gate-enable pin
- *   BOARD_POWER_STAGE_ALWAYS_ON - driver has no MCU enable input
+ *   BOARD_POWER_STAGE_ALWAYS_ON - reserved; rejected by this RTOS integration
  */
 #define BOARD_POWER_STAGE_DISABLED          0U
 #define BOARD_POWER_STAGE_GPIO_EN           1U

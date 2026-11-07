@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1440" viewBox="0 0 2200 1440">
+<rect width="100%" height="100%" fill="white"/>
+<text x="70" y="93" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="48">H750 纯 C 移植路线</text>
+<text x="70" y="148" fill="#4C6072" font-family="Microsoft YaHei, sans-serif" font-size="28">当前实现与拟议方案分开：先固定所有权、交接和时间，再逐模块迁入功能</text>
+<path d="M 850 715 C 785 715, 785 350, 720 350" fill="none" stroke="#93AABD" stroke-width="2"/>
+<path d="M 850 715 C 785 715, 785 700, 720 700" fill="none" stroke="#93AABD" stroke-width="2"/>
+<path d="M 850 715 C 785 715, 785 1050, 720 1050" fill="none" stroke="#93AABD" stroke-width="2"/>
+<path d="M 1350 715 C 1410 715, 1410 350, 1470 350" fill="none" stroke="#93AABD" stroke-width="2"/>
+<path d="M 1350 715 C 1410 715, 1410 700, 1470 700" fill="none" stroke="#93AABD" stroke-width="2"/>
+<path d="M 1350 715 C 1410 715, 1410 1050, 1470 1050" fill="none" stroke="#93AABD" stroke-width="2"/>
+<rect x="850" y="620" width="500" height="190" fill="#EDF4F8" stroke="#93AABD" stroke-width="2"/>
+<text x="895" y="690" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="42">H750 · 纯 C</text>
+<text x="895" y="742" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="29">保留实时控制底座</text>
+<text x="895" y="791" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="29">先定合同，再迁功能</text>
+<rect x="70" y="220" width="650" height="275" fill="#F7F9FB" stroke="#CED8E0" stroke-width="2"/>
+<text x="94" y="271" fill="#24597C" font-family="Microsoft YaHei, sans-serif" font-size="31">01 现有底座｜保留</text>
+<text x="94" y="330" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">RTOS + HAL + TIM1 控制链</text>
+<text x="94" y="373" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">AD2S、ADC、已有电流 / 速度 PI</text>
+<text x="94" y="416" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">1668486：有限场景基础板测</text>
+<text x="94" y="459" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">002 状态观测：仅编译 / 静态通过</text>
+<rect x="70" y="570" width="650" height="275" fill="#F7F9FB" stroke="#CED8E0" stroke-width="2"/>
+<text x="94" y="621" fill="#24597C" font-family="Microsoft YaHei, sans-serif" font-size="31">02 数据合同｜本轮明确</text>
+<text x="94" y="680" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">命令：整组发布，控制边界应用</text>
+<text x="94" y="723" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">采样：时刻、源帧号、有效性</text>
+<text x="94" y="766" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">明确写者；故障可随时撤许可</text>
+<text x="94" y="809" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">拟议合同尚未接入固件</text>
+<rect x="70" y="920" width="650" height="275" fill="#F7F9FB" stroke="#CED8E0" stroke-width="2"/>
+<text x="94" y="971" fill="#24597C" font-family="Microsoft YaHei, sans-serif" font-size="31">03 命令 + 生命周期｜下一步</text>
+<text x="94" y="1030" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">appTask 校验 → TIM1 提交</text>
+<text x="94" y="1073" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">seq / epoch / STOP 优先</text>
+<text x="94" y="1116" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">C mailbox + active_command</text>
+<text x="94" y="1159" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">不直接搬入 C++ Axis / Fibre</text>
+<rect x="1470" y="220" width="650" height="275" fill="#F7F9FB" stroke="#CED8E0" stroke-width="2"/>
+<text x="1494" y="271" fill="#24597C" font-family="Microsoft YaHei, sans-serif" font-size="31">04 电流 + 角度对时｜闭环前</text>
+<text x="1494" y="330" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">theta_i：电流采样时刻</text>
+<text x="1494" y="373" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">theta_pwm：输出生效时刻</text>
+<text x="1494" y="416" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">2 ms 是临时预算，误差上限未定</text>
+<text x="1494" y="459" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">先测相位，补极对数与最高转速</text>
+<rect x="1470" y="570" width="650" height="275" fill="#F7F9FB" stroke="#CED8E0" stroke-width="2"/>
+<text x="1494" y="621" fill="#24597C" font-family="Microsoft YaHei, sans-serif" font-size="31">05 控制能力｜逐模块移植</text>
+<text x="1494" y="680" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">输入斜坡 / 限制 / 校准组织</text>
+<text x="1494" y="723" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">先保留现有 PI 作对照</text>
+<text x="1494" y="766" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">rpm / A 与 turn/s / Nm 分开</text>
+<text x="1494" y="809" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">每个模块独立测试和回归</text>
+<rect x="1470" y="920" width="650" height="275" fill="#F7F9FB" stroke="#CED8E0" stroke-width="2"/>
+<text x="1494" y="971" fill="#24597C" font-family="Microsoft YaHei, sans-serif" font-size="31">06 通信 + 保护｜分阶段</text>
+<text x="1494" y="1030" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">CAN / RS485 / ETH 共用命令入口</text>
+<text x="1494" y="1073" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">遥测、日志不阻塞控制</text>
+<text x="1494" y="1116" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">快保护独立关输出，故障锁存</text>
+<text x="1494" y="1159" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">DMA、失联、存储逐项定合同</text>
+<line x1="70" y1="1285" x2="2120" y2="1285" stroke="#CED8E0" stroke-width="2"/>
+<text x="70" y="1347" fill="#4C6072" font-family="Microsoft YaHei, sans-serif" font-size="27">证据门槛贯穿全程：源码核对 → 编译 / 行为检查 → 对应硬件场景验收；未知参数不填成可运行默认值</text>
+</svg>

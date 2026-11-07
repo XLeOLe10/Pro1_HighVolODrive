@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1330" viewBox="0 0 2200 1330">
+<rect width="100%" height="100%" fill="white"/>
+<text x="70" y="93" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="48">整组命令如何交接与生效</text>
+<text x="70" y="147" fill="#4C6072" font-family="Microsoft YaHei, sans-serif" font-size="27">拟议机制，尚未实现；现有 AD2S 快照已使用短 PRIMASK 复制，但命令仍是独立全局变量</text>
+<rect x="70" y="235" width="455" height="260" fill="#F2F6F9" stroke="#B9CBD8" stroke-width="2"/>
+<text x="90" y="292" fill="#24597C" font-family="Microsoft YaHei, sans-serif" font-size="32">通信适配层</text>
+<text x="90" y="358" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="26">解析局部请求 B</text>
+<text x="90" y="406" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="26">速度 B + Iq 上限 B</text>
+<text x="90" y="454" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="26">不写 PWM / 活动参数</text>
+<line x1="532" y1="370" x2="593" y2="370" stroke="#93AABD" stroke-width="3"/>
+<line x1="581" y1="362" x2="593" y2="370" stroke="#93AABD" stroke-width="3"/>
+<line x1="581" y1="378" x2="593" y2="370" stroke="#93AABD" stroke-width="3"/>
+<rect x="605" y="235" width="455" height="260" fill="#F2F6F9" stroke="#B9CBD8" stroke-width="2"/>
+<text x="625" y="292" fill="#24597C" font-family="Microsoft YaHei, sans-serif" font-size="32">appTask 状态管理</text>
+<text x="625" y="358" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="26">来源 / 状态 / 数值 / 期限</text>
+<text x="625" y="406" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="26">完整 B 组校验在区外</text>
+<text x="625" y="454" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="26">唯一正常命令发布者</text>
+<line x1="1067" y1="370" x2="1128" y2="370" stroke="#93AABD" stroke-width="3"/>
+<line x1="1116" y1="362" x2="1128" y2="370" stroke="#93AABD" stroke-width="3"/>
+<line x1="1116" y1="378" x2="1128" y2="370" stroke="#93AABD" stroke-width="3"/>
+<rect x="1140" y="235" width="455" height="260" fill="#F2F6F9" stroke="#B9CBD8" stroke-width="2"/>
+<text x="1160" y="292" fill="#24597C" font-family="Microsoft YaHei, sans-serif" font-size="32">单槽 mailbox</text>
+<text x="1160" y="358" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="26">PRIMASK 内固定整组复制</text>
+<text x="1160" y="406" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="26">DMB → 发布 → 恢复</text>
+<text x="1160" y="454" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="26">槽满 BUSY，不覆盖</text>
+<line x1="1602" y1="370" x2="1663" y2="370" stroke="#93AABD" stroke-width="3"/>
+<line x1="1651" y1="362" x2="1663" y2="370" stroke="#93AABD" stroke-width="3"/>
+<line x1="1651" y1="378" x2="1663" y2="370" stroke="#93AABD" stroke-width="3"/>
+<rect x="1675" y="235" width="455" height="260" fill="#F2F6F9" stroke="#B9CBD8" stroke-width="2"/>
+<text x="1695" y="292" fill="#24597C" font-family="Microsoft YaHei, sans-serif" font-size="32">TIM1 周期入口</text>
+<text x="1695" y="358" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="26">复核 seq / epoch / fault</text>
+<text x="1695" y="406" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="26">整组安装 active B</text>
+<text x="1695" y="454" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="26">发布 applied_seq</text>
+<text x="70" y="592" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="32">观察的是同一组参数版本，不是逐字段“碰巧读对”</text>
+<line x1="70" y1="702" x2="2130" y2="702" stroke="#DCE4EA" stroke-width="2"/>
+<text x="90" y="664" fill="#24597C" font-family="Microsoft YaHei, sans-serif" font-size="29">发布前</text>
+<text x="530" y="664" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="29">活动参数仍为完整 A 组</text>
+<line x1="70" y1="790" x2="2130" y2="790" stroke="#DCE4EA" stroke-width="2"/>
+<text x="90" y="752" fill="#24597C" font-family="Microsoft YaHei, sans-serif" font-size="29">短复制期间</text>
+<text x="530" y="752" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="29">TIM1 暂缓进入；硬件保持此前输出</text>
+<line x1="70" y1="878" x2="2130" y2="878" stroke="#DCE4EA" stroke-width="2"/>
+<text x="90" y="840" fill="#24597C" font-family="Microsoft YaHei, sans-serif" font-size="29">下一控制边界</text>
+<text x="530" y="840" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="29">本轮只用完整 B 组，不混用 A / B</text>
+<rect x="70" y="965" width="2060" height="190" fill="#FCF3EB" stroke="#DCC6B0" stroke-width="2"/>
+<text x="95" y="1017" fill="#704F31" font-family="Microsoft YaHei, sans-serif" font-size="32">STOP / FAULT 优先，不排在普通命令后面</text>
+<text x="95" y="1072" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">STOP 走独立撤销通路；快速故障先关输出，再记录 / 撤销旧 epoch 与 pending</text>
+<text x="95" y="1119" fill="#1D2B3A" font-family="Microsoft YaHei, sans-serif" font-size="27">最终使能前再次核对故障、epoch 和许可；旧 START 不得重放</text>
+<text x="70" y="1246" fill="#4C6072" font-family="Microsoft YaHei, sans-serif" font-size="26">applied_seq 只证明参数已安装，不证明转速到达或 PWM 已物理生效；降低 Iq 上限须在本控制拍约束最终指令</text>
+</svg>

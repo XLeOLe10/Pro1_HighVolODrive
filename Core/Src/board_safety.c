@@ -1,6 +1,7 @@
 #include "main.h"
 #include "board_config.h"
 #include "board_safety.h"
+#include "axis_status.h"
 
 #if (BOARD_POWER_STAGE_MODE != BOARD_POWER_STAGE_GPIO_EN) && \
     (BOARD_POWER_STAGE_MODE != BOARD_POWER_STAGE_DISABLED)
@@ -99,6 +100,7 @@ void BoardSafety_LatchFault(uint32_t reason)
         board_fault_ipsr = __get_IPSR();
     }
     board_fault_mask |= reason;
+    AxisStatus_LatchFault(); /* After hardware disable, including pre-scheduler failure. */
     __DMB();
     __set_PRIMASK(saved);
 }

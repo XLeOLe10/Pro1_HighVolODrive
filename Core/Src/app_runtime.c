@@ -1,6 +1,7 @@
 #include "main.h"
 #include "app_runtime.h"
 #include "app_policy.h"
+#include "axis_status.h"
 #include "board_config.h"
 #include "board_safety.h"
 #include "current_sense.h"
@@ -234,6 +235,8 @@ void AppRuntime_FastISR(void)
     uint32_t saved;
     uint32_t critical_started;
     uint32_t elapsed;
+    uint32_t status_inhibits = 0U;
+    uint8_t feedback_fresh;
     uint8_t feedback_ok;
     uint8_t sample_ok;
     uint8_t allow;
@@ -250,9 +253,10 @@ void AppRuntime_FastISR(void)
     AD2S1210_GetSnapshot(&snapshot);
     now_ms = HAL_GetTick();
     now_cycles = DWT->CYCCNT;
+    feedback_fresh = (uint8_t)APP_FEEDBACK_FRESH(now_ms, snapshot.sample_tick_ms,
+                           now_cycles, snapshot.sample_cycles, feedback_age_limit_cycles);
     feedback_ok = (uint8_t)((snapshot.valid != 0U) && (snapshot.speed_valid != 0U) &&
-        APP_FEEDBACK_FRESH(now_ms, snapshot.sample_tick_ms,
-                           now_cycles, snapshot.sample_cycles, feedback_age_limit_cycles));
+                           (feedback_fresh != 0U));
     if (feedback_ok == 0U)
     {
         app_feedback_invalid_count++;
@@ -311,6 +315,17 @@ void AppRuntime_FastISR(void)
         OpenFOC_Run_20kHz();
     }
 
+    /* Observe existing prerequisites. This diagnostic has no control authority. */
+    if (power_pwm_prepared == 0U) status_inhibits |= AXIS_INHIBIT_PWM_NOT_PREPARED;
+    if (CurrentMonitor_IsReady() == 0U) status_inhibits |= AXIS_INHIBIT_CURRENT_OFFSETS;
+    if (snapshot.valid == 0U) status_inhibits |= AXIS_INHIBIT_POSITION;
+    if (snapshot.speed_valid == 0U) status_inhibits |= AXIS_INHIBIT_SPEED;
+    if (feedback_fresh == 0U) status_inhibits |= AXIS_INHIBIT_FEEDBACK_AGE;
+    if (sample_ok == 0U) status_inhibits |= AXIS_INHIBIT_ADC_FRAME;
+    if (resolver_dynamic_test_lockout_active != 0U) status_inhibits |= AXIS_INHIBIT_TEST_LOCKOUT;
+#if (BOARD_POWER_STAGE_MODE == BOARD_POWER_STAGE_DISABLED)
+    status_inhibits |= AXIS_INHIBIT_POWER_DISABLED;
+#endif
     saved = __get_PRIMASK();
     __disable_irq();
     critical_started = DWT->CYCCNT;
@@ -318,6 +333,8 @@ void AppRuntime_FastISR(void)
         CurrentMonitor_IsReady(), (uint8_t)(feedback_ok && sample_ok),
         board_fault_mask, resolver_dynamic_test_lockout_active);
     BoardSafety_SetOutputsEnabled(allow);
+    if (board_fault_mask != 0U) status_inhibits |= AXIS_INHIBIT_FAULT;
+    AxisStatus_Publish(board_output_enabled, foc_aligning, status_inhibits);
     telemetry_ref_rpm = foc_speed_ref_rpm;
     telemetry_feedback_rpm = foc_speed_feedback_rpm;
     __DMB();
