@@ -21,6 +21,8 @@
 #include "tim.h"
 
 /* USER CODE BEGIN 0 */
+#include "board_config.h"
+#include "board_safety.h"
 
 /* USER CODE END 0 */
 
@@ -110,6 +112,12 @@ void MX_TIM1_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN TIM1_Init 2 */
+#if (BOARD_POWER_STAGE_MODE == BOARD_POWER_STAGE_DISABLED)
+  /* Do not call the generated AF post-init in a disabled-power build. */
+  BoardSafety_InitSafe();
+  /* The generated post-init only configures GPIO for this instance. */
+  if (htim1.Instance == TIM1) return;
+#endif
 
   /* USER CODE END TIM1_Init 2 */
   HAL_TIM_MspPostInit(&htim1);

@@ -21,7 +21,6 @@ volatile uint8_t board_output_enabled = 0U;
  * No waits, allocation, formatted output or RTOS services on a fault path. */
 static void GateInactive(void)
 {
-#if (BOARD_POWER_STAGE_MODE == BOARD_POWER_STAGE_GPIO_EN)
     uint32_t shift = POSITION_VAL(BOARD_GATE_EN_PIN) * 2U;
     BOARD_GATE_EN_GPIO_CLK_ENABLE();
     BOARD_GATE_EN_GPIO_PORT->BSRR =
@@ -30,7 +29,6 @@ static void GateInactive(void)
     CLEAR_BIT(BOARD_GATE_EN_GPIO_PORT->OTYPER, BOARD_GATE_EN_PIN);
     MODIFY_REG(BOARD_GATE_EN_GPIO_PORT->PUPDR, 3UL << shift, 0U);
     MODIFY_REG(BOARD_GATE_EN_GPIO_PORT->MODER, 3UL << shift, 1UL << shift);
-#endif
 
 }
 
@@ -41,6 +39,9 @@ void BoardSafety_DisableOutputs(void)
     {
         /* The conditional HAL MOE macro would not clear MOE with CC4E set. */
         CLEAR_BIT(TIM1->BDTR, TIM_BDTR_MOE);
+#if (BOARD_POWER_STAGE_MODE == BOARD_POWER_STAGE_DISABLED)
+        CLEAR_BIT(TIM1->CCER, POWER_CHANNEL_ENABLES);
+#endif
     }
     board_output_enabled = 0U;
     __DSB();
@@ -116,3 +117,27 @@ void BoardSafety_Fatal(uint32_t reason)
         __NOP();
     }
 }
+
+
+#if AXIS_COMMAND_BENCH_ENABLE
+uint32_t BoardSafety_PowerOutputsAreDisabled(void)
+{
+    /* Register readback of this fixed board, not an external power measurement.
+     * No writes: a broken guard must fail the bench, not be hidden by repair. */
+    const uint32_t a_mask = (3UL << 16U) | (3UL << 18U) | (3UL << 20U);
+    const uint32_t a_out = (1UL << 16U) | (1UL << 18U) | (1UL << 20U);
+    const uint32_t e_mask = (3UL << 16U) | (3UL << 20U);
+    const uint32_t e_out = (1UL << 16U) | (1UL << 20U);
+    return (board_output_enabled == 0U) &&
+        ((TIM1->BDTR & TIM_BDTR_MOE) == 0U) &&
+        ((TIM1->CCER & POWER_CHANNEL_ENABLES) == 0U) &&
+        ((GPIOB->MODER & (3UL << 20U)) == (1UL << 20U)) &&
+        ((GPIOB->ODR & GPIO_PIN_10) == 0U) &&
+        ((GPIOA->MODER & a_mask) == a_out) &&
+        ((GPIOB->MODER & (3UL << 2U)) == (1UL << 2U)) &&
+        ((GPIOE->MODER & e_mask) == e_out) &&
+        ((GPIOA->ODR & (GPIO_PIN_8 | GPIO_PIN_9 | GPIO_PIN_10)) == 0U) &&
+        ((GPIOB->ODR & GPIO_PIN_1) == 0U) &&
+        ((GPIOE->ODR & (GPIO_PIN_8 | GPIO_PIN_10)) == 0U);
+}
+#endif

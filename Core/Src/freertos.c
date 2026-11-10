@@ -67,8 +67,53 @@ void StartAppTask(void *argument);
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
 /* Hook prototypes */
+void vApplicationIdleHook(void);
 void vApplicationStackOverflowHook(xTaskHandle xTask, signed char *pcTaskName);
 void vApplicationMallocFailedHook(void);
+
+/* USER CODE BEGIN 2 */
+void vApplicationIdleHook(void)
+{
+  static uint32_t last_probe_tick;
+  uint32_t now;
+  uint32_t free_bytes;
+
+  /* appTask is created before scheduler start and is never deleted/replaced.
+   * NULL would measure the idle task itself, so never pass it to this API. */
+  if (appTaskHandle == NULL)
+  {
+    return;
+  }
+#if AXIS_COMMAND_BENCH_ENABLE
+  if (app_stack_probe_enabled == 0U)
+  {
+    return;
+  }
+#endif
+  now = HAL_GetTick();
+  if ((uint32_t)(now - last_probe_tick) < APP_DIAGNOSTIC_PERIOD_MS)
+  {
+    return;
+  }
+
+  /* Kernel V10.3.1 scans the task's stack fill without suspending scheduling
+   * or masking interrupts. appTask and TIM1 can preempt this idle-priority
+   * work. No wait, allocation, output, or blocking API is allowed here.
+   * Stack use may change while preempted: this is delayed diagnostic evidence,
+   * not overflow protection or proof of worst-case stack safety. */
+  free_bytes = (uint32_t)uxTaskGetStackHighWaterMark((TaskHandle_t)appTaskHandle)
+             * (uint32_t)sizeof(StackType_t);
+  if (free_bytes < app_stack_min_free_bytes)
+  {
+    app_stack_min_free_bytes = free_bytes;
+  }
+  /* Rate-limit from completion: never catch up with back-to-back scans if
+   * higher-priority work starved idle. A stale timestamp remains observable. */
+  last_probe_tick = HAL_GetTick();
+  app_stack_probe_last_tick_ms = last_probe_tick;
+  app_stack_probe_count++;
+}
+/* USER CODE END 2 */
 
 /* USER CODE BEGIN 4 */
 void vApplicationStackOverflowHook(xTaskHandle xTask, signed char *pcTaskName)

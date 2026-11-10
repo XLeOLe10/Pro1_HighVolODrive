@@ -1,6 +1,31 @@
 #ifndef APP_RUNTIME_H
 #define APP_RUNTIME_H
 #include <stdint.h>
+#include "board_config.h"
+
+#if AXIS_COMMAND_BENCH_ENABLE
+/* One frozen real-gap event. All durations are elapsed time including IRQs.
+ * The four previous_* fields belong to ONE previous task iteration, not maxima.
+ * Until captured=1, UINT32_MAX in these four fields means NOT CAPTURED.
+ * Diagnostic only: never use this data for control/output permission. */
+typedef struct {
+    uint32_t captured;
+    uint32_t previous_total_us;
+    uint32_t previous_acquisition_us;
+    uint32_t previous_telemetry_us;
+    uint32_t previous_diagnostics_us;
+    uint32_t sample_interval_us;
+    uint32_t between_tasks_us;
+    uint32_t current_entry_to_sample_us;
+    uint32_t misses_since_previous_body;
+    uint32_t previous_iteration;
+    uint32_t gap_count;
+    uint32_t previous_stack_scan_ran;
+    uint32_t dwt_ready;
+} AppGapTrace;
+extern volatile AppGapTrace app_gap_trace;
+extern volatile uint32_t app_stack_probe_enabled;
+#endif
 
 void AppRuntime_Init(void);           /* main, before scheduler */
 void AppRuntime_TaskStart(void);      /* appTask, once */
@@ -11,7 +36,11 @@ extern volatile uint32_t app_task_iterations;
 extern volatile uint32_t app_task_deadline_misses;
 extern volatile uint32_t app_task_last_cycles;
 extern volatile uint32_t app_task_max_cycles;
+/* Idle-owned, best-effort diagnostics; no control decisions use these.
+ * UINT32_MAX/count=0 means unmeasured; a stale timestamp means no recent scan. */
 extern volatile uint32_t app_stack_min_free_bytes;
+extern volatile uint32_t app_stack_probe_count;
+extern volatile uint32_t app_stack_probe_last_tick_ms;
 extern volatile uint32_t app_heap_free_bytes;
 extern volatile uint32_t app_heap_min_free_bytes;
 extern volatile uint32_t app_feedback_invalid_count;

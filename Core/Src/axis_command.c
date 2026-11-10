@@ -2,11 +2,18 @@
 #include "main.h"
 #include "board_safety.h"
 #include "cmsis_os.h"
+#include "board_config.h"
 
 /* Intentionally unconfirmed. These zeroes mean reject, not unlimited.
  * A later reviewed configuration must define real speed/current/lease bounds.
  * HOST tests supply synthetic limits; those are never linked here. */
+#if AXIS_COMMAND_BENCH_ENABLE
+/* Synthetic command fixtures ONLY; config header rejects enabled power here.
+ * Runtime does not pass bench commands to FOC. Not motor operating limits. */
+static const AxisCommandLimits command_limits = {1U, 1000.0f, 4.0f, 1000U};
+#else
 static const AxisCommandLimits command_limits = {0U, 0.0f, 0.0f, 0U};
+#endif
 static AxisCommandCore command_core;
 extern osThreadId_t appTaskHandle;
 
@@ -130,4 +137,27 @@ void AxisCommandPort_RejectActive(uint32_t reason)
     BoardSafety_DisableOutputs();
     AxisCommand_Revoke(&command_core, reason);
     PublishDiagnostics(HAL_GetTick());
+}
+
+
+uint32_t AxisCommandPort_GetSnapshot(AxisCommandSnapshot *snapshot)
+{
+    uint32_t saved, started;
+    if ((snapshot == NULL) || (IsPublisher() == 0U)) return AXIS_CMD_INVALID;
+    saved = __get_PRIMASK();
+    __disable_irq();
+    started = DWT->CYCCNT;
+    snapshot->active = command_core.active;
+    snapshot->active_valid = command_core.active_valid;
+    snapshot->run_epoch = command_core.run_epoch;
+    snapshot->applied_seq = command_core.applied_seq;
+    snapshot->applied_control_seq = command_core.applied_control_seq;
+    snapshot->control_seq = command_core.control_seq;
+    snapshot->result_seq = command_core.result_seq;
+    snapshot->result = command_core.result;
+    snapshot->cancelled_seq = command_core.cancelled_seq;
+    snapshot->stop_applied_ticket = command_core.stop_applied_ticket;
+    snapshot->permit = AxisCommand_Permitted(&command_core, HAL_GetTick(), board_fault_mask);
+    Unlock(saved, started);
+    return AXIS_CMD_OK;
 }

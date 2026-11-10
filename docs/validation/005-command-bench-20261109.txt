@@ -1,0 +1,824 @@
+005 禁输出命令演练 — 2026-11-09 验证记录
+记录时间：2026-11-09T11:09:12.607920+08:00
+仓库：D:\stm32H750\High_fengshan\FOC_T
+分支：Xiao_ODrive
+基线：5bae072453eaecaf730482577f71d2666d6f2ed1 + 本记录下列源文件/项目配置指纹对应的未提交差异
+阶段：SRC PASS / BUILD PASS / HOST PASS / HW NOT_RUN
+没有执行 Git 暂存、提交、推送或合并；没有下载、复位或操作硬件电源。
+历史板测及旧待机截图只证明旧版本，不支持本增量硬件通过。
+
+本轮范围及证明边界
+- 普通 FOC_T 保持未确认运行范围；测试 FOC_T_CommandBench 是同源码的独立编译目标/独立产物。
+- BENCH=1 必须 POWER_STAGE=DISABLED。测试数据不进入 FOC，OpenFOC_ApplyCommand(NULL)。
+- 测试源在 appTask 自动单轮驱动真实 Submit/Stop，TIM1 消费；无新增线程、DMA、CubeMX、堆栈配置修改。
+- disabled主动拉EN低，六路PWM保持GPIO低，跳过能配置AF的post-init，CH4仅CC4E，不经PWM_Start置MOE。
+- ISR在例行关闭前读回隔离寄存器，异常先锁故障关断；任务也检查。寄存器读回不等于物理驱动测量。
+- 72 B快照包含整帧/结果/epoch/control_seq/permit。对象核验保存PRIMASK、CPSID、固定复制、DMB和恢复。
+- 实际快照与发布关中断时长、完整最坏IRQ延迟、最坏栈、物理EN/PWM/关断延迟均未板测。
+- HAL自身若停走，不能由同一HAL时钟自超时；HOST涵盖这种停滞不能直接得到PASS。
+- 测试数据1000rpm/4A等只为测试范围，不是实际电机运行许可或保护阈值。
+
+结果摘要
+1. 原core8组203断言 + 实际FOC/Xmath55断言：258 PASS。
+2. 新增状态机8组139（真实bench+core、模拟port），真实port普通31/测试93，真实board_safety102：365 PASS。
+3. 行为断言合计623；另9配置案例PASS（4接受、5预期编译拒绝），不合并计作行为断言。
+4. GCC4.5.3，C99 -Wall -Wextra -Werror；状态机/port另-pedantic。实际安全源码的标准{0}初值只单独禁用旧GCC的missing-field-initializers警告。
+   Cygwin find_fast_cwd和DOS路径提示是工具环境告警，以下原始日志保留；不是C源码warning。
+5. 测试目标首次全量0错误1警告（tim.c不可达语句#111-D），已改成Instance条件return；最终增量0错误0警告。
+   最终Code62668 RO812 RW824 ZI24840；map ROM63580 B（RW装载被压缩），RAM RW+ZI25664 B。
+6. 普通目标最终全量0错误0警告，Code60776 RO812 RW764 ZI24780，ROM61688 B，RAM25544 B。
+   普通HEX SHA256=917d81b62fe9e6ca1706d5b4003fbffcea8b390d656cd0f51d20a55637b6aa30，与此前基线相同。
+   ROM/RAM静态增量：测试目标+1892 B / +120 B；appTask栈4096 B与heap_4 16384 B保持原配置。
+7. 测试只自动跑一遍，成功后持续检查；硬件预期4项：stage=100(0x64),pass_mask=63(0x3F),fail_code=0,board_output_enabled=0。
+   此项尚未由用户在板上执行；失败stage=200(0xC8)，不以已有截图推定。
+
+可复现命令（只构建/主机；没有下载）
+在仓库目录运行：
+  powershell -File tests/run-command-host.ps1
+  C:\Users\LEGION\AppData\Local\Programs\Python\Python310\python.exe tests/run_command_bench_host.py
+Keil通过Start-Process -WindowStyle Hidden，WorkingDirectory为仓库，以下为ArgumentList；等待退出后读.log：
+  D:\UV4\UV4.exe -r "D:\stm32H750\High_fengshan\FOC_T\MDK-ARM\FOC_T.uvprojx" -t FOC_T_CommandBench -o "D:\stm32H750\High_fengshan\FOC_T\MDK-ARM\FOC_T_CommandBench\bench-20261109.log"
+  D:\UV4\UV4.exe -b "D:\stm32H750\High_fengshan\FOC_T\MDK-ARM\FOC_T.uvprojx" -t FOC_T_CommandBench -o "D:\stm32H750\High_fengshan\FOC_T\MDK-ARM\FOC_T_CommandBench\bench-final-20261109.log"
+  D:\UV4\UV4.exe -r "D:\stm32H750\High_fengshan\FOC_T\MDK-ARM\FOC_T.uvprojx" -t FOC_T -o "D:\stm32H750\High_fengshan\FOC_T\MDK-ARM\FOC_T\normal-bench-regression-20261109.log"
+主机脚本只向已忽略build目录写产物。Keil生成的小型RTE和DebugConfig属于新目标配置，应随源码评审；AXF/HEX/日志不提交。
+首次bench构建的警告不能被最终日志覆盖；下方保留三次原始日志。
+
+========================================================================
+工程目标与来源（解析实际uvprojx；编译行为另由产物核验）
+========================================================================
+FOC_T: {'c': 56, 'asm': 1, 'cpp': 0, 'defines': 'USE_PWR_LDO_SUPPLY,USE_HAL_DRIVER,STM32H750xx', 'output': 'FOC_T\\', 'output_name': 'FOC_T', 'uAC6': '0', 'C99': '1', 'GNU': '1'}
+FOC_T_CommandBench: {'c': 56, 'asm': 1, 'cpp': 0, 'defines': 'USE_PWR_LDO_SUPPLY,USE_HAL_DRIVER,STM32H750xx,AXIS_COMMAND_BENCH_ENABLE=1,BOARD_POWER_STAGE_MODE=0', 'output': 'FOC_T_CommandBench\\', 'output_name': 'FOC_T_CommandBench', 'uAC6': '0', 'C99': '1', 'GNU': '1'}
+
+========================================================================
+原始日志 MDK-ARM/FOC_T_CommandBench/bench-20261109.log
+========================================================================
+*** Using Compiler 'V5.06 update 7 (build 960)', folder: 'D:\ARM\ARMCC\Bin'
+Rebuild target 'FOC_T_CommandBench'
+compiling axis_command_bench.c...
+assembling startup_stm32h750xx.s...
+compiling axis_status.c...
+compiling axis_command_core.c...
+compiling board_safety.c...
+compiling ad2s1210.c...
+compiling gpio.c...
+compiling Xmath.c...
+compiling current_monitor.c...
+compiling current_sense.c...
+compiling open_foc.c...
+compiling axis_command.c...
+compiling freertos.c...
+compiling main.c...
+compiling app_runtime.c...
+compiling adc.c...
+compiling usart.c...
+compiling stm32h7xx_hal_tim_ex.c...
+compiling stm32h7xx_hal_msp.c...
+compiling tim.c...
+../Core/Src/tim.c(122): warning:  #111-D: statement is unreachable
+    HAL_TIM_MspPostInit(&htim1);
+../Core/Src/tim.c: 1 warning, 0 errors
+compiling stm32h7xx_it.c...
+compiling stm32h7xx_hal_adc.c...
+compiling stm32h7xx_hal_timebase_tim.c...
+compiling spi.c...
+compiling stm32h7xx_hal_adc_ex.c...
+compiling stm32h7xx_hal_tim.c...
+compiling stm32h7xx_hal_flash.c...
+compiling stm32h7xx_hal_rcc.c...
+compiling stm32h7xx_hal_gpio.c...
+compiling stm32h7xx_hal_flash_ex.c...
+compiling stm32h7xx_hal_rcc_ex.c...
+compiling stm32h7xx_hal_hsem.c...
+compiling stm32h7xx_hal_pwr.c...
+compiling stm32h7xx_hal_mdma.c...
+compiling stm32h7xx_hal_dma_ex.c...
+compiling stm32h7xx_hal_pwr_ex.c...
+compiling stm32h7xx_hal_dma.c...
+compiling croutine.c...
+compiling event_groups.c...
+compiling list.c...
+compiling queue.c...
+compiling stream_buffer.c...
+compiling tasks.c...
+compiling timers.c...
+compiling stm32h7xx_hal_cortex.c...
+compiling heap_4.c...
+compiling stm32h7xx_hal_spi.c...
+compiling port.c...
+compiling stm32h7xx_hal_exti.c...
+compiling stm32h7xx_hal_i2c_ex.c...
+compiling stm32h7xx_hal.c...
+compiling stm32h7xx_hal_spi_ex.c...
+compiling stm32h7xx_hal_uart_ex.c...
+compiling stm32h7xx_hal_i2c.c...
+compiling stm32h7xx_hal_uart.c...
+compiling system_stm32h7xx.c...
+compiling cmsis_os2.c...
+linking...
+Program Size: Code=62440 RO-data=812 RW-data=824 ZI-data=24840  
+FromELF: creating hex file...
+"FOC_T_CommandBench\FOC_T_CommandBench.axf" - 0 Error(s), 1 Warning(s).
+Build Time Elapsed:  00:03:08
+
+========================================================================
+原始日志 MDK-ARM/FOC_T_CommandBench/bench-final-20261109.log
+========================================================================
+*** Using Compiler 'V5.06 update 7 (build 960)', folder: 'D:\ARM\ARMCC\Bin'
+Build target 'FOC_T_CommandBench'
+compiling tim.c...
+linking...
+Program Size: Code=62668 RO-data=812 RW-data=824 ZI-data=24840  
+FromELF: creating hex file...
+"FOC_T_CommandBench\FOC_T_CommandBench.axf" - 0 Error(s), 0 Warning(s).
+Build Time Elapsed:  00:00:10
+
+========================================================================
+原始日志 MDK-ARM/FOC_T/normal-bench-regression-20261109.log
+========================================================================
+*** Using Compiler 'V5.06 update 7 (build 960)', folder: 'D:\ARM\ARMCC\Bin'
+Rebuild target 'FOC_T'
+compiling axis_status.c...
+assembling startup_stm32h750xx.s...
+compiling axis_command_bench.c...
+compiling axis_command_core.c...
+compiling current_sense.c...
+compiling open_foc.c...
+compiling ad2s1210.c...
+compiling current_monitor.c...
+compiling Xmath.c...
+compiling board_safety.c...
+compiling app_runtime.c...
+compiling axis_command.c...
+compiling freertos.c...
+compiling gpio.c...
+compiling main.c...
+compiling spi.c...
+compiling tim.c...
+compiling usart.c...
+compiling adc.c...
+compiling stm32h7xx_it.c...
+compiling stm32h7xx_hal_msp.c...
+compiling stm32h7xx_hal_tim_ex.c...
+compiling stm32h7xx_hal_timebase_tim.c...
+compiling stm32h7xx_hal_adc_ex.c...
+compiling stm32h7xx_hal_adc.c...
+compiling stm32h7xx_hal_tim.c...
+compiling stm32h7xx_hal_flash.c...
+compiling stm32h7xx_hal_flash_ex.c...
+compiling stm32h7xx_hal_rcc.c...
+compiling stm32h7xx_hal_rcc_ex.c...
+compiling stm32h7xx_hal_mdma.c...
+compiling stm32h7xx_hal_gpio.c...
+compiling stm32h7xx_hal_hsem.c...
+compiling stm32h7xx_hal_pwr.c...
+compiling stm32h7xx_hal_dma_ex.c...
+compiling stm32h7xx_hal_pwr_ex.c...
+compiling stm32h7xx_hal_dma.c...
+compiling croutine.c...
+compiling event_groups.c...
+compiling list.c...
+compiling queue.c...
+compiling stream_buffer.c...
+compiling tasks.c...
+compiling timers.c...
+compiling stm32h7xx_hal_cortex.c...
+compiling heap_4.c...
+compiling stm32h7xx_hal.c...
+compiling port.c...
+compiling stm32h7xx_hal_i2c_ex.c...
+compiling stm32h7xx_hal_exti.c...
+compiling stm32h7xx_hal_i2c.c...
+compiling stm32h7xx_hal_spi_ex.c...
+compiling stm32h7xx_hal_uart_ex.c...
+compiling stm32h7xx_hal_spi.c...
+compiling stm32h7xx_hal_uart.c...
+compiling system_stm32h7xx.c...
+compiling cmsis_os2.c...
+linking...
+Program Size: Code=60776 RO-data=812 RW-data=764 ZI-data=24780  
+FromELF: creating hex file...
+"FOC_T\FOC_T.axf" - 0 Error(s), 0 Warning(s).
+Build Time Elapsed:  00:02:55
+
+========================================================================
+原始日志 build/command-host/baseline-bench-20261109.tmp
+========================================================================
+      0 [main] gcc 139596 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+gcc (GCC) 4.5.3
+Copyright (C) 2010 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+      0 [main] gcc 141704 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+      0 [main] axis_command_host_tests 19784 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+validation/configuration/finite values
+whole-frame A/B, full slot and separate acceptance/application
+STOP full-slot priority/idempotence/old epoch rejection
+START readiness rejection and UPDATE lifecycle
+pending/active expiry, no renewal of expired run, tick wrap/ambiguity
+fault after publication and final-gate fault, sticky denial
+bad sequence/epoch and all metadata exhaustion paths
+limit decrease on non-slow-loop tick; invalid clamp inputs
+PASS: 8 scenarios, 203 assertions; synthetic HOST limits only.
+Boundary: sequential core tests do not prove Cortex-M7 PRIMASK timing or physical PWM safety.
+      1 [main] gcc 144740 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+      0 [main] open_foc_command_host 31832 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+PASS: 55 FOC command integration assertions; CPU register stubs only
+HOST command and FOC integration suites PASS
+
+========================================================================
+原始日志 build/command-bench-host/host-results.txt
+========================================================================
+CPU-only bench verification; target IRQ timing / physical outputs NOT tested.
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe --version
+      0 [main] gcc 146996 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+gcc (GCC) 4.5.3
+Copyright (C) 2010 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -pedantic -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=1 -DBOARD_POWER_STAGE_MODE=0 tests/axis_command_bench_host.c Core/Src/axis_command_bench.c Core/Src/axis_command_core.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/bench_sequence.exe
+      0 [main] gcc 1244 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/bench_sequence.exe
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/bench_sequence.exe
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\stm32H750\High_fengshan\FOC_T\build\command-bench-host\bench_sequence.exe
+      0 [main] bench_sequence 139984 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+complete round: async consumer / HAL and control counter wrap
+complete round: async consumer / HAL and control counter wrap
+complete round: consume before Submit returns
+startup stable-ready delay; startup timeout; readiness loss
+unsafe output, fault, ISR overrun, failed snapshot each latch FAIL
+TIM1 stall before apply and after expiry cannot falsely PASS
+lost application/STOP acknowledgement; mixed old/new frame detection
+late task must observe START application before claiming expiry success
+PASS: 8 bench sequencer groups / 139 assertions; real command core, simulated port.
+No assertion proves hardware inhibition, IRQ timing or physical current safety.
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -pedantic -I tests/port_stubs -I Core/Inc tests/axis_command_port_host.c Core/Src/axis_command.c Core/Src/axis_command_core.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/port_normal.exe
+      0 [main] gcc 141164 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/port_normal.exe
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/port_normal.exe
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\stm32H750\High_fengshan\FOC_T\build\command-bench-host\port_normal.exe
+      1 [main] port_normal 97312 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+PASS: 31 real command port assertions (BENCH=0); deterministic CPU stubs only
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -pedantic -I tests/port_stubs -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=1 -DBOARD_POWER_STAGE_MODE=0 tests/axis_command_port_host.c Core/Src/axis_command.c Core/Src/axis_command_core.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/port_bench.exe
+     68 [main] gcc 127432 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/port_bench.exe
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/port_bench.exe
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\stm32H750\High_fengshan\FOC_T\build\command-bench-host\port_bench.exe
+      0 [main] port_bench 142752 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+PASS: 93 real command port assertions (BENCH=1); deterministic CPU stubs only
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=1 -DBOARD_POWER_STAGE_MODE=0 tests/safety_profile_host.c Core/Src/board_safety.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/safety_profile.exe
+      0 [main] gcc 119096 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/safety_profile.exe
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/safety_profile.exe
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\stm32H750\High_fengshan\FOC_T\build\command-bench-host\safety_profile.exe
+      0 [main] safety_profile 138652 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+PASS: 102 safety profile assertions; actual board_safety.c with CPU register stubs only
+Boundary: BSRR requests are asserted; ODR fixture is explicit, not a model of physical pin transitions.
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DEXPECT_BENCH=0 -DEXPECT_POWER=1 -c tests/safety_config_probe.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/default_normal_probe.o
+      1 [main] gcc 128976 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/default_normal_probe.o
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/default_normal_probe.o
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -c Core/Src/board_safety.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/default_normal_actual.o
+      0 [main] gcc 145236 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/default_normal_actual.o
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/default_normal_actual.o
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=0 -DBOARD_POWER_STAGE_MODE=1 -DEXPECT_BENCH=0 -DEXPECT_POWER=1 -c tests/safety_config_probe.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/explicit_normal_probe.o
+      0 [main] gcc 27152 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/explicit_normal_probe.o
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/explicit_normal_probe.o
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=0 -DBOARD_POWER_STAGE_MODE=1 -c Core/Src/board_safety.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/explicit_normal_actual.o
+      0 [main] gcc 141744 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/explicit_normal_actual.o
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/explicit_normal_actual.o
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=0 -DBOARD_POWER_STAGE_MODE=0 -DEXPECT_BENCH=0 -DEXPECT_POWER=0 -c tests/safety_config_probe.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/normal_disabled_probe.o
+      0 [main] gcc 46680 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/normal_disabled_probe.o
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/normal_disabled_probe.o
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=0 -DBOARD_POWER_STAGE_MODE=0 -c Core/Src/board_safety.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/normal_disabled_actual.o
+      1 [main] gcc 145280 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/normal_disabled_actual.o
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/normal_disabled_actual.o
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=1 -DBOARD_POWER_STAGE_MODE=0 -DEXPECT_BENCH=1 -DEXPECT_POWER=0 -c tests/safety_config_probe.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/bench_disabled_probe.o
+      0 [main] gcc 143040 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/bench_disabled_probe.o
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/bench_disabled_probe.o
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=1 -DBOARD_POWER_STAGE_MODE=0 -c Core/Src/board_safety.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/bench_disabled_actual.o
+      0 [main] gcc 146144 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/bench_disabled_actual.o
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/bench_disabled_actual.o
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=1 -DEXPECT_BENCH=1 -DEXPECT_POWER=1 -c tests/safety_config_probe.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/bench_missing_power_probe.o
+      0 [main] gcc 135004 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+In file included from tests/safety_config_probe.c:1:0:
+Core/Inc/board_config.h:31:2: error: #error "Command bench requires BOARD_POWER_STAGE_DISABLED."
+EXIT: 1
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=1 -DBOARD_POWER_STAGE_MODE=1 -DEXPECT_BENCH=1 -DEXPECT_POWER=1 -c tests/safety_config_probe.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/bench_gpio_probe.o
+      1 [main] gcc 144656 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+In file included from tests/safety_config_probe.c:1:0:
+Core/Inc/board_config.h:31:2: error: #error "Command bench requires BOARD_POWER_STAGE_DISABLED."
+EXIT: 1
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=1 -DBOARD_POWER_STAGE_MODE=2 -DEXPECT_BENCH=1 -DEXPECT_POWER=2 -c tests/safety_config_probe.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/bench_always_on_probe.o
+      1 [main] gcc 18388 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+In file included from tests/safety_config_probe.c:1:0:
+Core/Inc/board_config.h:31:2: error: #error "Command bench requires BOARD_POWER_STAGE_DISABLED."
+EXIT: 1
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=2 -DBOARD_POWER_STAGE_MODE=0 -DEXPECT_BENCH=2 -DEXPECT_POWER=0 -c tests/safety_config_probe.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/invalid_bench_value_probe.o
+      0 [main] gcc 142976 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+In file included from tests/safety_config_probe.c:1:0:
+Core/Inc/board_config.h:28:2: error: #error "AXIS_COMMAND_BENCH_ENABLE must be 0 or 1."
+EXIT: 1
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=0 -DBOARD_POWER_STAGE_MODE=2 -DEXPECT_BENCH=0 -DEXPECT_POWER=2 -c tests/safety_config_probe.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/normal_always_on_probe.o
+      1 [main] gcc 142416 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/normal_always_on_probe.o
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/normal_always_on_probe.o
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=0 -DBOARD_POWER_STAGE_MODE=2 -c Core/Src/board_safety.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/normal_always_on_actual.o
+      1 [main] gcc 147104 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+Core/Src/board_safety.c:8:2: error: #error "RTOS bring-up requires a gate EN; ALWAYS_ON needs a separate startup design."
+EXIT: 1
+
+PASS: 365 new behavior assertions + 9 profile cases
+
+========================================================================
+实际map摘录 MDK-ARM/FOC_T/FOC_T.map
+========================================================================
+    Removing axis_command_bench.o(i.AxisCommandBench_Init), (2 bytes).
+    Removing axis_command_bench.o(i.AxisCommandBench_Step), (6 bytes).
+    Removing axis_command.o(i.AxisCommandPort_GetSnapshot), (164 bytes).
+    Removing axis_command.o(i.AxisCommandPort_Submit), (132 bytes).
+    command_core                             0x240002fc   Data         148  axis_command.o(.bss)
+    ucHeap                                   0x240013c4   Data       16384  heap_4.o(.bss)
+    __initial_sp                             0x240063c8   Data           0  startup_stm32h750xx.o(STACK)
+    Execution Region ER_IROM1 (Exec base: 0x08000000, Load base: 0x08000000, Size: 0x0000f094, Max: 0x00020000, ABSOLUTE)
+    Execution Region RW_IRAM1 (Exec base: 0x20000000, Load base: 0x0800f094, Size: 0x00000000, Max: 0x00020000, ABSOLUTE)
+    Execution Region RW_IRAM2 (Exec base: 0x24000000, Load base: 0x0800f094, Size: 0x000063c8, Max: 0x00080000, ABSOLUTE, COMPRESSED[0x00000064])
+     60776       4774        812        764      24780    1952502   Grand Totals
+    Total RO  Size (Code + RO Data)                61588 (  60.14kB)
+    Total RW  Size (RW Data + ZI Data)             25544 (  24.95kB)
+    Total ROM Size (Code + RO Data + RW Data)      61688 (  60.24kB)
+
+========================================================================
+实际map摘录 MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.map
+========================================================================
+    command_core                             0x24000378   Data         148  axis_command.o(.bss)
+    ucHeap                                   0x24001440   Data       16384  heap_4.o(.bss)
+    AxisCommandBench_Step                    0x08001f05   Thumb Code   904  axis_command_bench.o(i.AxisCommandBench_Step)
+    AxisCommandPort_GetSnapshot              0x08002379   Thumb Code   150  axis_command.o(i.AxisCommandPort_GetSnapshot)
+    AxisCommandPort_Submit                   0x080024a1   Thumb Code   116  axis_command.o(i.AxisCommandPort_Submit)
+    axis_bench_stage                         0x24000000   Data           4  axis_command_bench.o(.data)
+    axis_bench_pass_mask                     0x24000004   Data           4  axis_command_bench.o(.data)
+    axis_bench_fail_code                     0x24000008   Data           4  axis_command_bench.o(.data)
+    __initial_sp                             0x24006440   Data           0  startup_stm32h750xx.o(STACK)
+    Execution Region ER_IROM1 (Exec base: 0x08000000, Load base: 0x08000000, Size: 0x0000f7f8, Max: 0x00020000, ABSOLUTE)
+    Execution Region RW_IRAM1 (Exec base: 0x20000000, Load base: 0x0800f7f8, Size: 0x00000000, Max: 0x00020000, ABSOLUTE)
+    Execution Region RW_IRAM2 (Exec base: 0x24000000, Load base: 0x0800f7f8, Size: 0x00006440, Max: 0x00080000, ABSOLUTE, COMPRESSED[0x00000064])
+     62668       4932        812        824      24840    1964553   Grand Totals
+    Total RO  Size (Code + RO Data)                63480 (  61.99kB)
+    Total RW  Size (RW Data + ZI Data)             25664 (  25.06kB)
+    Total ROM Size (Code + RO Data + RW Data)      63580 (  62.09kB)
+
+========================================================================
+fromelf对象片段 MDK-ARM/FOC_T_CommandBench/bench-safety-disassembly.txt / BoardSafety_SetOutputsEnabled
+========================================================================
+** Section #9 'i.BoardSafety_SetOutputsEnabled' (SHT_PROGBITS) [SHF_ALLOC + SHF_EXECINSTR]
+    Size   : 10 bytes (alignment 2)
+    Address: 0x00000000
+
+    $t
+    i.BoardSafety_SetOutputsEnabled
+    BoardSafety_SetOutputsEnabled
+        0x00000000:    b510        ..      PUSH     {r4,lr}
+        0x00000002:    4604        .F      MOV      r4,r0
+        0x00000004:    f7fffffe    ....    BL       BoardSafety_DisableOutputs ; 0x0 Section #4
+        0x00000008:    bd10        ..      POP      {r4,pc}
+
+========================================================================
+fromelf对象片段 MDK-ARM/FOC_T_CommandBench/bench-command-disassembly.txt / AxisCommandPort_GetSnapshot
+========================================================================
+** Section #7 'i.AxisCommandPort_GetSnapshot' (SHT_PROGBITS) [SHF_ALLOC + SHF_EXECINSTR]
+    Size   : 164 bytes (alignment 4)
+    Address: 0x00000000
+
+    $t
+    i.AxisCommandPort_GetSnapshot
+    AxisCommandPort_GetSnapshot
+        0x00000000:    e92d41f0    -..A    PUSH     {r4-r8,lr}
+        0x00000004:    4604        .F      MOV      r4,r0
+        0x00000006:    b114        ..      CBZ      r4,{pc}+0x8 ; 0xe
+        0x00000008:    f7fffffe    ....    BL       IsPublisher ; 0x0 Section #12
+        0x0000000c:    b910        ..      CBNZ     r0,{pc}+0x8 ; 0x14
+        0x0000000e:    2002        .       MOVS     r0,#2
+        0x00000010:    e8bd81f0    ....    POP      {r4-r8,pc}
+        0x00000014:    f7fffffe    ....    BL       __get_PRIMASK ; 0x0 Section #15
+        0x00000018:    4606        .F      MOV      r6,r0
+        0x0000001a:    b672        r.      CPSID    i
+        0x0000001c:    481e        .H      LDR      r0,[pc,#120] ; [0x98] = 0xe0001000
+        0x0000001e:    6845        Eh      LDR      r5,[r0,#4]
+        0x00000020:    2220         "      MOVS     r2,#0x20
+        0x00000022:    491e        .I      LDR      r1,[pc,#120] ; [(command_core + 52) = 0x9c] = 0x34
+        0x00000024:    4620         F      MOV      r0,r4
+        0x00000026:    f7fffffe    ....    BL       __aeabi_memcpy4
+        0x0000002a:    481c        .H      LDR      r0,[pc,#112] ; [(command_core + 52) = 0x9c] = 0x34
+        0x0000002c:    3834        48      SUBS     r0,r0,#0x34
+        0x0000002e:    6d80        .m      LDR      r0,[r0,#0x58]
+        0x00000030:    6220         b      STR      r0,[r4,#0x20]
+        0x00000032:    481a        .H      LDR      r0,[pc,#104] ; [(command_core + 52) = 0x9c] = 0x34
+        0x00000034:    3834        48      SUBS     r0,r0,#0x34
+        0x00000036:    6dc0        .m      LDR      r0,[r0,#0x5c]
+        0x00000038:    6260        `b      STR      r0,[r4,#0x24]
+        0x0000003a:    4818        .H      LDR      r0,[pc,#96] ; [(command_core + 52) = 0x9c] = 0x34
+        0x0000003c:    3834        48      SUBS     r0,r0,#0x34
+        0x0000003e:    6ec0        .n      LDR      r0,[r0,#0x6c]
+        0x00000040:    62a0        .b      STR      r0,[r4,#0x28]
+        0x00000042:    4816        .H      LDR      r0,[pc,#88] ; [(command_core + 52) = 0x9c] = 0x34
+        0x00000044:    3834        48      SUBS     r0,r0,#0x34
+        0x00000046:    6f00        .o      LDR      r0,[r0,#0x70]
+        0x00000048:    62e0        .b      STR      r0,[r4,#0x2c]
+        0x0000004a:    4814        .H      LDR      r0,[pc,#80] ; [(command_core + 52) = 0x9c] = 0x34
+        0x0000004c:    3834        48      SUBS     r0,r0,#0x34
+        0x0000004e:    6e80        .n      LDR      r0,[r0,#0x68]
+        0x00000050:    6320         c      STR      r0,[r4,#0x30]
+        0x00000052:    4812        .H      LDR      r0,[pc,#72] ; [(command_core + 52) = 0x9c] = 0x34
+        0x00000054:    3834        48      SUBS     r0,r0,#0x34
+        0x00000056:    6f40        @o      LDR      r0,[r0,#0x74]
+        0x00000058:    6360        `c      STR      r0,[r4,#0x34]
+        0x0000005a:    4810        .H      LDR      r0,[pc,#64] ; [(command_core + 52) = 0x9c] = 0x34
+        0x0000005c:    3834        48      SUBS     r0,r0,#0x34
+        0x0000005e:    6f80        .o      LDR      r0,[r0,#0x78]
+        0x00000060:    63a0        .c      STR      r0,[r4,#0x38]
+        0x00000062:    480e        .H      LDR      r0,[pc,#56] ; [(command_core + 52) = 0x9c] = 0x34
+        0x00000064:    3834        48      SUBS     r0,r0,#0x34
+        0x00000066:    6fc0        .o      LDR      r0,[r0,#0x7c]
+        0x00000068:    63e0        .c      STR      r0,[r4,#0x3c]
+        0x0000006a:    480c        .H      LDR      r0,[pc,#48] ; [(command_core + 52) = 0x9c] = 0x34
+        0x0000006c:    3834        48      SUBS     r0,r0,#0x34
+        0x0000006e:    f8d00088    ....    LDR      r0,[r0,#0x88]
+        0x00000072:    6420         d      STR      r0,[r4,#0x40]
+        0x00000074:    f7fffffe    ....    BL       HAL_GetTick
+        0x00000078:    4607        .F      MOV      r7,r0
+        0x0000007a:    4809        .H      LDR      r0,[pc,#36] ; [board_fault_mask = 0xa0] = 0
+        0x0000007c:    6802        .h      LDR      r2,[r0,#0]
+        0x0000007e:    4639        9F      MOV      r1,r7
+        0x00000080:    4806        .H      LDR      r0,[pc,#24] ; [(command_core + 52) = 0x9c] = 0x34
+        0x00000082:    3834        48      SUBS     r0,r0,#0x34
+        0x00000084:    f7fffffe    ....    BL       AxisCommand_Permitted
+        0x00000088:    6460        `d      STR      r0,[r4,#0x44]
+        0x0000008a:    4629        )F      MOV      r1,r5
+        0x0000008c:    4630        0F      MOV      r0,r6
+        0x0000008e:    f7fffffe    ....    BL       Unlock ; 0x0 Section #14
+        0x00000092:    2000        .       MOVS     r0,#0
+        0x00000094:    e7bc        ..      B        {pc}-0x84 ; 0x10
+    $d
+        0x00000096:    0000        ..      DCW    0
+        0x00000098:    e0001000    ....    DCD    3758100480
+        0x0000009c:    00000034    4...    DCD    52 ; command_core
+        0x000000a0:    00000000    ....    DCD    0 ; board_fault_mask
+
+========================================================================
+fromelf对象片段 MDK-ARM/FOC_T_CommandBench/bench-command-disassembly.txt / Unlock
+========================================================================
+** Section #14 'i.Unlock' (SHT_PROGBITS) [SHF_ALLOC + SHF_EXECINSTR]
+    Size   : 56 bytes (alignment 4)
+    Address: 0x00000000
+
+    $t
+    i.Unlock
+    Unlock
+        0x00000000:    460a        .F      MOV      r2,r1
+        0x00000002:    bf00        ..      NOP      
+        0x00000004:    bf00        ..      NOP      
+        0x00000006:    bf00        ..      NOP      
+        0x00000008:    f3bf8f5f    .._.    DMB      
+        0x0000000c:    bf00        ..      NOP      
+        0x0000000e:    bf00        ..      NOP      
+        0x00000010:    bf00        ..      NOP      
+        0x00000012:    4b07        .K      LDR      r3,[pc,#28] ; [0x30] = 0xe0001000
+        0x00000014:    685b        [h      LDR      r3,[r3,#4]
+        0x00000016:    1a99        ..      SUBS     r1,r3,r2
+        0x00000018:    4b06        .K      LDR      r3,[pc,#24] ; [axis_command_critical_max_cycles = 0x34] = 0
+        0x0000001a:    681b        .h      LDR      r3,[r3,#0]
+        0x0000001c:    4299        .B      CMP      r1,r3
+        0x0000001e:    d901        ..      BLS      {pc}+0x6 ; 0x24
+        0x00000020:    4b04        .K      LDR      r3,[pc,#16] ; [axis_command_critical_max_cycles = 0x34] = 0
+        0x00000022:    6019        .`      STR      r1,[r3,#0]
+        0x00000024:    bf00        ..      NOP      
+        0x00000026:    f3808810    ....    MSR      PRIMASK,r0
+        0x0000002a:    bf00        ..      NOP      
+        0x0000002c:    4770        pG      BX       lr
+    $d
+        0x0000002e:    0000        ..      DCW    0
+        0x00000030:    e0001000    ....    DCD    3758100480
+        0x00000034:    00000000    ....    DCD    0 ; axis_command_critical_max_cycles
+
+========================================================================
+SHA256指纹（基线+所有变更代码/项目/测试及关键未变输入、实际产物；不含自身或循环文档指纹）
+========================================================================
+339bb137f68f56893187006846af137a6c525fc58474e32c94c20d61a4c26ac1  .gitignore
+fb14a1dc80d770a37fbae4d3879244f5ef6328ec5c76f3aedd129dfe31c54249  Core/Inc/FreeRTOSConfig.h
+f4e21847e3f3bdfd441db3edec7a987d6c2c5ef1d8b995c006b5a161113c1079  Core/Inc/axis_command.h
+0ef8c408d9167580553b2873ef72fee05eaa8bb617f65cf7cafcf99344b35ab2  Core/Inc/axis_command_bench.h
+d74fe8d9c30bdf5bea508d8c8ed4b4d542b5be9e900d28b2e37c55a3461d4692  Core/Inc/axis_command_core.h
+9100c8d19c328b70a433476d810aabd8247c45df4152e667733f0bf0e861f30a  Core/Inc/board_config.h
+7c4b7d0091677adb66583a0bc92e6de98b5cb035cf6421234acbdd6dd21ef1bb  Core/Inc/board_safety.h
+77c9dd8b9470ae5c81cadc17ae303f1d23e9ccaa9183b90ce89223d2bce174ae  Core/Src/ad2s1210.c
+b9fa07c9454db6a3328054e0cf6e968d3d7f9381444c0184ae4be546ed933e39  Core/Src/adc.c
+b0fdc0f9a24084873bc51c503828806ca1e4baaa9823b78f4a5a953ba08adfee  Core/Src/app_runtime.c
+5f1f4a9df1e64e697561dd83bbb34a268c0c614288c18fea9a033f45ac405201  Core/Src/axis_command.c
+4309354ffb956e0105ad4d1f889e79d30d73ad9f3ea436aeebc1a7845982daa0  Core/Src/axis_command_bench.c
+7a7f6198d17a06c75cb4b63d5ef97a9eb248e758c09c0848bf14b877140c930a  Core/Src/axis_command_core.c
+1fa33a84c0c29cb73838940c2dfab96b0f6b5bf6f602760f53921ab69a723926  Core/Src/board_safety.c
+99bd08db399b20301425f5626a834ddd6b6ba5dc6530e5498cf6a18c0da1edcc  Core/Src/freertos.c
+72274e8274bd3f0b389e4672e16b4ce326f64b03172163bbb277261b5111a7bc  Core/Src/main.c
+5400a7785866ece0541d10e1df0a86963533089438123b218e264f11b21b41e4  Core/Src/open_foc.c
+f82e8ec5f68fdb49837a2b083494550e9d7ca0bdb786da126beda8c0f5d72604  Core/Src/tim.c
+1b9d96eb09db1b3fdb995b8af08cb483500c65745a033b7930a284371dc5f334  FOC_T.ioc
+852d4826f2278eb4d006a8249df55d30e2379eff4007ab841e094f3858fa8f52  MDK-ARM/DebugConfig/FOC_T_CommandBench_STM32H750VBTx_1.1.1.dbgconf
+6415eed12f5209f05ac374fdaea1559e25628bfb74297ddb9bf11e2b39234e52  MDK-ARM/FOC_T.uvprojx
+afd8820afa50b6ccc5e33d97f4862faea01e5f78e64f943fbe04cd61600557d1  MDK-ARM/FOC_T/FOC_T.axf
+917d81b62fe9e6ca1706d5b4003fbffcea8b390d656cd0f51d20a55637b6aa30  MDK-ARM/FOC_T/FOC_T.hex
+80e0d115701d69b756fa90d2a83ea89a1f318d62c691edcbb254df25dd181a02  MDK-ARM/FOC_T/FOC_T.map
+1cd561d34115cb611838e3c46a3073336004f0ee0db6185ce1cd10e8ee168235  MDK-ARM/FOC_T/FOC_T.sct
+672c2e6b15829840c20a442cb29fb62d284234c4ee68d25e46cccc40269887c0  MDK-ARM/FOC_T/normal-bench-regression-20261109.log
+4d61d884187040453f517a60cdee91f5f21b4687c8791063365938268487a26e  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.axf
+7e6b7c123b0e0c2c44322f565f3eda1c463ffedc4a9f28d95a53c16b0106670c  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.hex
+77de137a2d9b532bfaa2eca2c5252c48a26ac1d2a0f0f11495154be58fcd9df5  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.map
+1cd561d34115cb611838e3c46a3073336004f0ee0db6185ce1cd10e8ee168235  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.sct
+75ca676296b5bea7ae7415f088ef3e220b4b56a2cbf5927c0017511cba0b0839  MDK-ARM/FOC_T_CommandBench/bench-20261109.log
+5b173edf30dcef4510f8ee37c93ae7a4151aff7a79132747d9beb0afaaa5e48c  MDK-ARM/FOC_T_CommandBench/bench-command-disassembly.txt
+0ffb3c7234fd53e790f1e748348bf422e8494e3d6c02d009cc9665c2fe7bef06  MDK-ARM/FOC_T_CommandBench/bench-final-20261109.log
+896728a8435e89a22e2bc36d8a224b9a932ac956d2bc9cd4a3011471cf5e5ae2  MDK-ARM/FOC_T_CommandBench/bench-safety-disassembly.txt
+0d7e0c15f65ca8f2720f5f43a4f9d3e44467699a98f7331ac30953b6b42f7b6f  MDK-ARM/FOC_T_CommandBench/bench-tim-disassembly.txt
+2ffde74ddce81f15079360cf0e74585aaddd1c935a4cbcd4cd792242aefb0c3d  MDK-ARM/RTE/_FOC_T_CommandBench/RTE_Components.h
+8aa7753b0613b1e400425cb3b4fb5a0d3a4c57f487831ac4f54fd39a91b11bf9  MDK-ARM/startup_stm32h750xx.s
+3b6026d96b82dd758c4c292a00c8d11fa95d33a7d5431790781f0fbbd276ab08  build/command-bench-host/host-results.txt
+8cdc8c246114b66f7e13af746990b419f3291ce6876ade106a17020e7d7e144b  build/command-host/baseline-bench-20261109.tmp
+505cb6e446df24e74b251b04b167ce5f4084a874b15baf202d79f8b5d8e2c3ac  tests/axis_command_bench_host.c
+ae6134c7790d38765f934c69f0cb8e7646c88e82a3376d81056a41169b17c6c5  tests/axis_command_port_host.c
+d8426aaa3570e3a60f5e313eaea4404849e5a43f2b82fd955f135d29bbfd7ff6  tests/host_safety/main.h
+285138c2230e8ae6f372ead964b7d83eb4c5dd798b3ce3e3ca6300a8bd0ff2d2  tests/port_stubs/board_safety.h
+697a46385429961582728fe912442d3d4825df64f703a6292d1c33bd56cedc57  tests/port_stubs/cmsis_os.h
+84b4b9cfba6f6fd354801b54f7b3327cb15704fb96cf62b28919bd55c02747a5  tests/port_stubs/main.h
+50acbc1a12e3f72d8629cd7707a60420a4e5bbf5d17f75e16414620e0e8b852e  tests/run-command-host.ps1
+5501f599bac3b15b469213a0b30f1840df08d2a441ae7e981f0d3c4a1b8124bb  tests/run_command_bench_host.py
+13e344b96e6b77155a9c848fc0089f59c4541ed03fd0e6be3ca9645151998e20  tests/safety_config_probe.c
+64470721916f96e7c8663be01b15236ba21d749e3af23c6fb3fc3e58312a7352  tests/safety_profile_host.c
+
+========================================================================
+差异检查及板测待办
+========================================================================
+Git暂存区为空，HEAD仍为5bae072453eaecaf730482577f71d2666d6f2ed1。
+tim.c原来为CRLF，保持该格式；仓库* -text下默认diff --check把CR误报为尾空格。
+git -c core.whitespace=cr-at-eol diff --check通过；没有为了绕过检查改整份生成文件换行。
+本轮硬件NOT_RUN。人工打开现有工程选择FOC_T_CommandBench，保持母线隔离，下载/复位/连续运行约10秒。
+只看spec前部4项；通过或失败截图作为本记录后续追加，必须绑定本次目标/源及产物。
+成功只验收禁输出命令演练，不批准实机闭环、实际电流范围或物理保护。
+
+========================================================================
+2026-11-09 最终只读复查与验收判据修正（覆盖上方第7项旧四项清单）
+========================================================================
+独立源码复查未发现新增误使能路径，发现旧四项可能误判：AxisCommandBench进入PASS后，若BoardSafety_Fatal关IRQ并死循环，任务不能再次调用Step把stage/fail改为失败；旧stage=100/mask=63/fail=0/output=0可全部保留。
+采用验收判据修正，不引入Fatal到bench的新调用依赖，不修改固件：
+最终4项必须同时满足 axis_bench_stage=100(0x64)、axis_bench_fail_code=0、board_fault_mask=0、board_output_enabled=0。
+axis_bench_pass_mask仅作备查，不是本轮必须Watch。六个顺序阶段由内部stage推进；仅完成全部阶段才进入PASS。
+源码依据：board_safety.c BoardSafety_Fatal先LatchFault再永久循环；LatchFault在关硬件后OR board_fault_mask。
+全部现有Fatal调用传非零BOARD_FAULT_*。CPU、栈、malloc、内核/调度等已进入现有Fatal路径的故障会使board_fault_mask非零，即使stage仍100也不判通过。
+这不把任意硬件锁死或无法执行故障处理器的情况视为已检测；四项单次截图亦不证明所有未来时刻活性、物理引脚或实时最坏延迟。
+本修正只更新当前spec的4项判据和本追加记录，固件/产物/原始日志/49项SHA256均未变化，无须重复构建。
+
+
+追加：2026-11-10 遥测/栈统计修复与禁输出观察收尾
+本段是最新检查点证据；以上2026-11-09初始构建、NOT_RUN及HEX不变结论按原时间保留。
+基线仍5bae072453eaecaf730482577f71d2666d6f2ed1，Xiao_ODrive，未提交工作区；下列指纹绑定当前输入/产物。
+本次操作仅文档归档，不重跑未变代码的测试/构建、不提交Git、不下载/复位/上电。
+
+事件及版本边界（不同版本截图不合并为一次测试）
+1. 旧后台冻结事件：总1247 us、采集248 us、遥测908 us、诊断0；含IRQ抢占，不证明printf独占908 us。
+2. 遥测有界格式化修复后、旧栈扫描关闭：用户截图stage100、fault/output0、deadline/gap/SPIerror0；invalid23仅为累计，不能认定全部启动产生。图片005-telemetry-fixed-probe-off-20261109.png。
+3. 恢复旧inline扫描：用户报告deadline近每秒+1；截图probe1、deadline0x21=33、gap0、stage0xC8=200。失败码未显示，不推定具体失败原因。图片005-inline-stack-scan-fail-20261110.png。
+4. 最终改Idle扫描后，用户报告一图开关0、另一图改为1。关闭图：deadline0/gap0/stage100/probe_count0；开启图明确probe1/deadline0/gap0/stage100/probe_count0x12=18。
+5. 判定：HW PASS（有限观察：18次Idle扫描已执行，未记录任务超时或采样超间隔，命令演练PASS保持）；本轮排查可停止并保存检查点。
+6. 条件沿用用户声明：功率母线断开，仅控制/传感器供电，目标FOC_T_CommandBench。最终截图无精确计时或板端固件回读，也无fail_code/fault/output同帧。不得写成“连续30秒已证实”、完整安全验收、长期稳定或带输出闭环通过。默认probe1，用户手改0→1是本次实验，不改变构建默认值。
+
+实现检查
+- TelemetryFormat_SpeedCsv：binary32位解析/有界整数CSV，不调用printf；两列三位小数CRLF，最近值中点取偶/保留负零；无效/编码越界/缓冲不足返回0且不写缓冲，调用端计丢帧。原UART IRQ缓冲所有权未改。
+- telemetry_format.c均已进入两个Keil目标；此前L6218E由工程清单缺项导致，修复后链接通过。普通目标也改变遥测和栈统计，最新HEX与初始基线不同是预期变化。
+- vApplicationIdleHook显式扫描appTaskHandle；NULL直接返回；不关中断、不挂起调度、不等待/分配/输出；现有appTask不删除/重建。仅Idle写min/count/last_tick_ms，三项不是控制快照。
+- 采样任务移除整栈扫描；Idle完成后至少再隔1000 ms扫描，不补跑；最低优先级可被appTask/TIM1抢占。繁忙和抢占导致延后/单次水位滞后，统计不证明最坏栈或充当溢出保护。
+- Idle Hook=1同步FreeRTOSConfig.h及FOC_T.ioc；未运行CubeMX生成。业务仍一个appTask，栈4096 B/heap16384 B、1ms调度、2ms新鲜度、溢出检查2/malloc钩子及功率隔离均未放宽。
+- map实际调用：prvIdleTask -> freertos.o(vApplicationIdleHook) -> uxTaskGetStackHighWaterMark；CMSIS弱空钩子被删除。hook自身16 B、调用链40 B；Idle静态最大深度104 B（既有任务删除路径），Idle栈512 B未改；不包含全部运行异常栈证明。
+
+HOST（原会话执行输出摘录；本次收尾没有重跑，未声称完整固件仿真）
+- tests/run_telemetry_format_host.py：PASS 9886809 assertions；200005 independent snprintf comparisons；容量边界/失败缓冲不改/NaNInf/舍入模式检查PASS。按字节守卫产生很多断言，数量不等于独立场景数；不保证ARM MicroLIB所有舍入模式字节相同。
+- tests/run_idle_hook_host.py：实际提取USER CODE 2，SHA256=832d52f108bfd76f9471e5e0d5f27452f625c6eb4f0d1abaa36743e96d85055e；normal134 checks / bench139 checks，各11次实际hook扫描，源码及配置检查PASS。
+- 两模块HOST使用GCC4.5.3/C99；有既有Cygwin FAST_CWD提示。Idle测试仅模拟时间/栈API，覆盖句柄、启停、周期、words转bytes、最小值、完成后计时、不补跑与tick回绕，不模拟真实抢占。
+- 原623项命令/安全行为及9项配置检查保留在上文，按相关输入指纹复核；本次没有把它们计作重新执行。
+
+BUILD：ARMCC 5.06 update7 build960，两目标顺序增量-b（非-r），0错误0警告。
+测试：Code60292/RO812/RW904/ZI24856；map实际ROM=61216 B（Flash中RW压缩为112 B），静态RAM=25760 B。
+普通：Code58028/RO812/RW776/ZI24776；map实际ROM=58944 B（Flash中RW压缩为104 B），静态RAM=25552 B。
+任务栈来自RTOS堆，不与静态RAM重复相加；两目标完整原始增量日志如下：
+
+LOG: MDK-ARM/FOC_T_CommandBench/idle-stack-probe-20261110.log
+*** Using Compiler 'V5.06 update 7 (build 960)', folder: 'D:\ARM\ARMCC\Bin'
+Build target 'FOC_T_CommandBench'
+compiling event_groups.c...
+compiling croutine.c...
+compiling list.c...
+compiling queue.c...
+compiling stream_buffer.c...
+compiling timers.c...
+compiling tasks.c...
+compiling heap_4.c...
+compiling port.c...
+compiling app_runtime.c...
+compiling freertos.c...
+compiling axis_command.c...
+compiling main.c...
+compiling cmsis_os2.c...
+linking...
+Program Size: Code=60292 RO-data=812 RW-data=904 ZI-data=24856  
+FromELF: creating hex file...
+"FOC_T_CommandBench\FOC_T_CommandBench.axf" - 0 Error(s), 0 Warning(s).
+Build Time Elapsed:  00:00:28
+
+LOG: MDK-ARM/FOC_T/idle-stack-probe-normal-20261110.log
+*** Using Compiler 'V5.06 update 7 (build 960)', folder: 'D:\ARM\ARMCC\Bin'
+Build target 'FOC_T'
+compiling list.c...
+compiling croutine.c...
+compiling event_groups.c...
+compiling timers.c...
+compiling queue.c...
+compiling stream_buffer.c...
+compiling tasks.c...
+compiling heap_4.c...
+compiling port.c...
+compiling freertos.c...
+compiling axis_command.c...
+compiling main.c...
+compiling app_runtime.c...
+compiling cmsis_os2.c...
+linking...
+Program Size: Code=58028 RO-data=812 RW-data=776 ZI-data=24776  
+FromELF: creating hex file...
+"FOC_T\FOC_T.axf" - 0 Error(s), 0 Warning(s).
+Build Time Elapsed:  00:00:27
+
+当前SHA256（源码/工程/测试/产物；本段不对循环文档自签名）
+339973e82fd9230aa818296d2a8b5f1bd23030c1ea02612f23f4092db168a259  Core/Src/app_runtime.c
+24beb149468339520540f39cf1c4bcad9da5b8e30ef46cf4613ca512206e891f  Core/Inc/app_runtime.h
+6bea976f89ce73634cfd16b2d31adc33335702635289bed02da505a38d4825e7  Core/Src/freertos.c
+1be63ae9823901bf7a9d16d69458d9e2a67796001b383c841240bf4b294d3e12  Core/Inc/FreeRTOSConfig.h
+4a70809d3e3e55123cc9bed3a5e3439fd9eb7eb5fb4171b0f9e3b75990b9c112  FOC_T.ioc
+01a99cde99abe2f38e7ad88c060e663461385d7c9b6e4c41e9a972ef62c10401  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.hex
+c64d0be6a2f9dd9d1c1f15e3efeac37f76955b6307dcdd3a62fc94174fd85115  MDK-ARM/FOC_T/FOC_T.hex
+39f4b6091ddfb1d3024bbc66bbb3c95da8e34ec8a0f6b18bc6f8dbf773f44c84  MDK-ARM/FOC_T.uvprojx
+aa2e8d7773dca6d83086e74048057c117e5b91368002150a0a1c289a84e97a2d  Core/Src/telemetry_format.c
+c42a3f9267a7b8525d9d5e068d9759c7ed2e1d4ff3cf5792147a662c16fa5819  Core/Inc/telemetry_format.h
+4309354ffb956e0105ad4d1f889e79d30d73ad9f3ea436aeebc1a7845982daa0  Core/Src/axis_command_bench.c
+0ef8c408d9167580553b2873ef72fee05eaa8bb617f65cf7cafcf99344b35ab2  Core/Inc/axis_command_bench.h
+5f1f4a9df1e64e697561dd83bbb34a268c0c614288c18fea9a033f45ac405201  Core/Src/axis_command.c
+f4e21847e3f3bdfd441db3edec7a987d6c2c5ef1d8b995c006b5a161113c1079  Core/Inc/axis_command.h
+7a7f6198d17a06c75cb4b63d5ef97a9eb248e758c09c0848bf14b877140c930a  Core/Src/axis_command_core.c
+d74fe8d9c30bdf5bea508d8c8ed4b4d542b5be9e900d28b2e37c55a3461d4692  Core/Inc/axis_command_core.h
+1fa33a84c0c29cb73838940c2dfab96b0f6b5bf6f602760f53921ab69a723926  Core/Src/board_safety.c
+7c4b7d0091677adb66583a0bc92e6de98b5cb035cf6421234acbdd6dd21ef1bb  Core/Inc/board_safety.h
+9100c8d19c328b70a433476d810aabd8247c45df4152e667733f0bf0e861f30a  Core/Inc/board_config.h
+d3be7141aa698c1e1cb85b5871671c5a2a1b9fde77f2bd535407fb6cf1ccfed8  Core/Inc/app_policy.h
+f82e8ec5f68fdb49837a2b083494550e9d7ca0bdb786da126beda8c0f5d72604  Core/Src/tim.c
+e01f121b11368bedd0e8b7730b4ee7e922e07d33c1b23682e6ac8f5f76fd3073  tests/test_telemetry_format.c
+405fb40ac8e08f5c73dfd2a9edd73472eafc35b10cdd7fc6c311a6674b755f60  tests/run_telemetry_format_host.py
+2255dc4f6a90050c4543dd37cd1c6b9d1e67abf8f349a12a9309e57489d8399a  tests/test_idle_hook_host.c
+21d2b38baaecacba2a88798378462d20235b074fa674d30c7b889c514eca59ef  tests/run_idle_hook_host.py
+9a119e5bfa2f88d24a681ba056c86c9a8ccf9548088e3e47b602170e3c36db17  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.axf
+aab0e9fafd470d88a6127e5eec80ba7883afb9b7dc0d5518c04ac31ea088bef4  MDK-ARM/FOC_T/FOC_T.axf
+39166b26f6114abd1a06495ecdeca6eebffb94f0e7e98e93e72d4000c04fc6ed  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.map
+dd9d9657c5cc7d3de721d01f1b177db905c16307fab9d57ad4d300ef1ed5909f  MDK-ARM/FOC_T/FOC_T.map
+e955fa05507e33efa561a0cd6d48f5d27a1c019714625ec0f98196d8ac67ca4b  MDK-ARM/FOC_T_CommandBench/idle-stack-probe-20261110.log
+bbde1d125a8e3d247cb309315bef1a211cb4e4bc1e22b89e6aba341552bc3872  MDK-ARM/FOC_T/idle-stack-probe-normal-20261110.log
+
+图片归档（原图字节复制，不裁切/修改；截图不是固件指纹证明）
+202a4d26ab88f736f9d369fba7bd8ae3437dcba71c2f1dd1103c531e1254896e  docs/validation/images/005-telemetry-fixed-probe-off-20261109.png  <- codex-clipboard-13664acf-0fa6-43cd-9e72-fac8cd37d5f4.png
+6f702d5684d67ff75bfd232911172515bbc61aa51cf4d75eec3eba837d981203  docs/validation/images/005-inline-stack-scan-fail-20261110.png  <- codex-clipboard-5530beac-3c4a-4846-b134-cf4364b66a5b.png
+71782d9ab4c9951c0fd8ab56f0eee19bb9add99168b1a38923e79c88ce6f3751  docs/validation/images/005-idle-probe-off-20261110.png  <- codex-clipboard-d618d8dd-d2c5-48e5-b53a-ab4211fd35b1.png
+43ae9a2b30e6a6cb269b441127d574353ca52a887db25388e0a6c5e844cecd9e  docs/validation/images/005-idle-probe-on-20261110.png  <- codex-clipboard-2d8247a0-f83c-4768-b544-9b8279da0f5d.png

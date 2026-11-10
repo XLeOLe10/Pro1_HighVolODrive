@@ -1,6 +1,7 @@
 #ifndef BOARD_SAFETY_H
 #define BOARD_SAFETY_H
 #include <stdint.h>
+#include "board_config.h"
 
 enum {
     BOARD_FAULT_HAL          = 1UL << 0,
@@ -13,7 +14,8 @@ enum {
     BOARD_FAULT_SENSOR_INIT = 1UL << 7,
     BOARD_FAULT_FEEDBACK    = 1UL << 8,
     BOARD_FAULT_ADC_FRAME   = 1UL << 9,
-    BOARD_FAULT_SCHEDULER   = 1UL << 10
+    BOARD_FAULT_SCHEDULER   = 1UL << 10,
+    BOARD_FAULT_OUTPUT_GUARD = 1UL << 11
 };
 extern volatile uint32_t board_fault_mask;
 extern volatile uint32_t board_first_fault;
@@ -33,5 +35,8 @@ __declspec(noreturn) void BoardSafety_Fatal(uint32_t reason);
 __attribute__((noreturn)) void BoardSafety_Fatal(uint32_t reason);
 #else
 void BoardSafety_Fatal(uint32_t reason);
+#endif
+#if AXIS_COMMAND_BENCH_ENABLE
+uint32_t BoardSafety_PowerOutputsAreDisabled(void);
 #endif
 #endif
