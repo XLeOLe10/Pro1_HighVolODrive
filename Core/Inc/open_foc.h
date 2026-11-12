@@ -11,6 +11,14 @@ typedef enum
     FOC_CONTROL_RESOLVER_OPEN_LOOP_TEST = 2
 } FOC_ControlState;
 
+/* Logical computation phase, not an output permit or proof of motor motion. */
+typedef enum
+{
+    FOC_PHASE_IDLE = 0,
+    FOC_PHASE_ALIGNING = 1,
+    FOC_PHASE_CLOSED_LOOP = 2
+} FOC_RunPhase;
+
 void OpenFOC_Init(void);
 void OpenFOC_Run_20kHz(void);
 void OpenFOC_Run_1ms(void);
@@ -18,6 +26,9 @@ void OpenFOC_Ramp_1ms(void);
 /* TIM1-only after startup; frame already validated by command boundary. */
 void OpenFOC_ApplyCommand(const AxisCommandFrame *frame);
 void OpenFOC_EnforceCommandLimit(void);
+/* Startup/TIM1 owner only: derived from private command/alignment state.
+ * Not a cross-task snapshot; appTask must not call this on live control data. */
+FOC_RunPhase OpenFOC_GetRunPhase(void);
 void OpenFOC_SetVoltageNorm(float uq_norm);
 void OpenFOC_SetUqVoltageNorm(float uq_norm);
 void OpenFOC_SetRotorFeedback(float resolver_angle_rad,
@@ -37,6 +48,7 @@ extern volatile float foc_dv;
 extern volatile float foc_dw;
 extern volatile float foc_theta;
 extern volatile float foc_current_rpm;
+/* Compatibility observation only; the private phase is authoritative. */
 extern volatile uint8_t foc_aligning;
 extern volatile float foc_align_u_norm;
 extern volatile uint8_t foc_auto_calibrate_offset;

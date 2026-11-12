@@ -61,7 +61,7 @@ volatile float foc_dv = 0.5f;
 volatile float foc_dw = 0.5f;
 volatile float foc_theta = 0.0f;
 volatile float foc_current_rpm = 0.0f;
-volatile uint8_t foc_aligning = 1U;
+volatile uint8_t foc_aligning = 0U;
 /* Adjustable in Keil Watch.  Start conservatively at 24 V because the former
    fixed 0.04 command caused an AD2S1210 input-clipping fault during alignment. */
 volatile float foc_align_u_norm = FOC_ALIGN_U_DEFAULT;
@@ -414,7 +414,7 @@ void OpenFOC_Init(void)
     foc_run_request = 0U;
     foc_control_state_request = FOC_CONTROL_CURRENT_LOOP;
     foc_control_state_active = FOC_CONTROL_CURRENT_LOOP;
-    foc_aligning = 1U;
+    foc_aligning = 0U;
     foc_iq_ref_a = 0.0f;
     foc_uq_ff = 0.0f;
     foc_speed_ref_rpm = 0.0f;
@@ -484,6 +484,14 @@ void OpenFOC_Stop(void)
     FOC_WriteDuty(0.5f, 0.5f, 0.5f);
 }
 
+FOC_RunPhase OpenFOC_GetRunPhase(void)
+{
+    /* A preloaded alignment duration while idle is not active alignment.
+     * No second writable state is introduced; TIM1 owns both private inputs. */
+    if (command_run == 0U) return FOC_PHASE_IDLE;
+    return (align_ms_left != 0U) ? FOC_PHASE_ALIGNING : FOC_PHASE_CLOSED_LOOP;
+}
+
 void OpenFOC_ApplyCommand(const AxisCommandFrame *frame)
 {
     if (frame == NULL)
@@ -513,6 +521,8 @@ void OpenFOC_ApplyCommand(const AxisCommandFrame *frame)
     foc_speed_target_rpm = command_speed_rpm;
     foc_speed_iq_limit_a = command_iq_limit_a;
     foc_speed_step_command = 0;
+    /* Also refresh an already-idle NULL command; Watch is not the authority. */
+    foc_aligning = (uint8_t)(OpenFOC_GetRunPhase() == FOC_PHASE_ALIGNING);
 }
 
 void OpenFOC_EnforceCommandLimit(void)
@@ -535,7 +545,7 @@ void OpenFOC_Ramp_1ms(void)
     {
         run_was_requested = 0U;
         align_ms_left = FOC_ALIGN_TIME_MS;
-        foc_aligning = 1U;
+        foc_aligning = 0U;
         ramped_speed_ref_rpm = 0.0f;
         foc_speed_ref_rpm = 0.0f;
         foc_current_rpm = 0.0f;

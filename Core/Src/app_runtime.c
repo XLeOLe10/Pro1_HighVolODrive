@@ -463,7 +463,8 @@ void AppRuntime_FastISR(void)
         board_fault_mask, resolver_dynamic_test_lockout_active);
     BoardSafety_SetOutputsEnabled(allow);
     if (board_fault_mask != 0U) status_inhibits |= AXIS_INHIBIT_FAULT;
-    AxisStatus_Publish(board_output_enabled, foc_aligning, status_inhibits);
+    AxisStatus_Publish(board_output_enabled,
+        (uint32_t)(OpenFOC_GetRunPhase() == FOC_PHASE_ALIGNING), status_inhibits);
     telemetry_ref_rpm = foc_speed_ref_rpm;
     telemetry_feedback_rpm = foc_speed_feedback_rpm;
     __DMB();

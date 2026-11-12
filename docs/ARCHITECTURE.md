@@ -2,9 +2,9 @@
 
 本页只维护**已经实现的当前架构**；拟议机制留在 spec。入口见 [docs/README.md](README.md)，移植路线见 [003 第7节](specs/003-c-port-architecture.md#7-移植表与顺序)。目标是参考 ODrive 的组织与算法，用 C 实现，不接入其 C++ 对象体系。
 
-版本锚点：2026-11-10，`Xiao_ODrive`，已提交基线`5bae072`＋005演练/遥测与Idle统计修复。SRC、分模块HOST与两目标BUILD通过；用户截图支持禁输出演练/空闲统计共存的有限观察。构建、指纹与证据边界见[同一记录的最新追加](validation/005-command-bench-20261109.txt)；完整物理保护及带输出闭环未验收。
+版本锚点：2026-11-10，`Xiao_ODrive`，已提交基线`1d3f101`＋006阶段接口增量。当前SRC/HOST/两目标BUILD通过；006四项禁输出Watch截图符合预期，HW仅该有限观察通过，见[006记录](validation/006-axis-run-phase-20261110.txt)追加证据；物理对齐/闭环和最坏时序仍未验证。005的有限禁输出观察留在[原记录](validation/005-command-bench-20261109.txt)，不继承为当前新固件通过。
 
-本工程有两个构建目标：`FOC_T`正常配置（未确认范围，拒绝START/UPDATE）；`FOC_T_CommandBench`以编译宏强制禁功率输出，合成命令只进入同一交接核心，FOC始终停机。测试目标有一次自动生产者，正常目标没有。当前验收与4项板测入口见[005](specs/005-command-handoff.md)。
+本工程有两个构建目标：`FOC_T`正常配置（未确认范围，拒绝START/UPDATE）；`FOC_T_CommandBench`以编译宏强制禁功率输出，合成命令只进入同一交接核心，FOC始终停机。测试目标有一次自动生产者，正常目标没有。当前验收与4项板测入口见[006](specs/006-axis-run-phase.md)，命令机制及旧演练见[005](specs/005-command-handoff.md)。
 
 003旧AXF差异原因仍未知；原发现及当时重建保留在[原记录](validation/003-architecture-build.txt)。当前验收层级逐项查[005](specs/005-command-handoff.md)。
 
@@ -54,7 +54,7 @@ flowchart LR
 | 角度 / 速度 | appTask 每 1 tick 尝试 SAMPLE/SPI；TIM1 只拿已发布快照，不做 SPI | [ad2s1210.c](../Core/Src/ad2s1210.c) `AD2S1210_Run_1kHz:798/GetSnapshot:139`；`app_runtime.c BackgroundStep:200` |
 | 命令与许可 | appTask唯一发布；TIM1唯一消费/active/epoch；局部校验、固定PRIMASK发布；默认配置未确认 | [axis_command.c](../Core/Src/axis_command.c) `AxisCommandPort_*`；[核心](../Core/Src/axis_command_core.c) `Validate/PublishValidated/Tick/Guard` |
 | 板上命令演练（仅测试目标） | appTask单轮START/UPDATE/STOP/旧代拒绝/到期/无复活；读取同一GetSnapshot；故障/超时锁FAIL | `axis_command_bench.c AxisCommandBench_Init/Step`；`app_runtime.c BackgroundStep` |
-| 原控制状态与 FOC | TIM1 每 20 拍调用慢环处理模式、对齐、速度 PI，再按拍执行电流控制/调制 | [open_foc.c](../Core/Src/open_foc.c) `OpenFOC_Ramp_1ms:492/Run_20kHz:674`；`app_runtime.c:282–315` |
+| 原控制状态与FOC阶段 | TIM1每20拍慢环处理对齐/速度PI，再按拍执行电流控制；只读Getter从私有command_run/align_ms_left派生IDLE/ALIGNING/CLOSED_LOOP，无第二阶段权威 | [open_foc.c](../Core/Src/open_foc.c) `OpenFOC_GetRunPhase/ApplyCommand/Ramp_1ms/Run_20kHz` |
 | 安全 / 只读状态 | board_safety 撤输出、锁存；axis_status 只汇报，不拥有启动权或完整 Axis 生命周期 | [board_safety.c](../Core/Src/board_safety.c) `BoardSafety_LatchFault:88`；[axis_status.c](../Core/Src/axis_status.c) `AxisStatus_Publish:5/LatchFault:12` |
 | 遥测 / 堆监测 | appTask约5 ms尝试有界整数转换的两列速度CSV，USART1 IRQ搬运；约1000 ms查询堆；实时有效性检查仍在TIM1 | `app_runtime.c SendTelemetry/BackgroundStep/FastISR`；`telemetry_format.c TelemetryFormat_SpeedCsv` |
 | 栈水位诊断 | 已有Idle任务约1000 ms扫描appTask栈，业务任务和IRQ可抢占；不等待/分配/关调度 | `freertos.c vApplicationIdleHook`；本地`tasks.c uxTaskGetStackHighWaterMark/prvTaskCheckFreeStackSpace` |
@@ -80,7 +80,9 @@ FreeRTOS 自带 Idle 和 Timer 服务任务不是额外业务任务，依据 `ta
 | 积分器、dq 给定、占空比 | main 给初值，运行期间 TIM1 控制代码独占 | 同一执行上下文；后台尚无正式修改接口；板级故障独立覆盖输出 | `open_foc.c OpenFOC_Init/Ramp_1ms/Run_20kHz/FOC_WriteDuty` |
 | 两列速度遥测 | TIM1 → appTask局部副本 → USART1 IRQ；静态发送缓冲96 B | 短PRIMASK复制两列，区外有界格式化；UART忙则丢帧、不覆盖在发缓冲；无DMA | `app_runtime.c SendTelemetry/FastISR`；`telemetry_format.c TelemetryFormat_SpeedCsv` |
 | app_stack_min_free_bytes / probe_count / last_tick_ms | Idle Hook唯一写入 → 调试观察；32位静态标量，appTask不消费 | 显式稳定appTaskHandle；words转bytes，保留历史最小值，完成后计时；UINT32_MAX/count=0为未测。三项不是原子快照，不进入控制许可 | `freertos.c vApplicationIdleHook`；`app_runtime.c`定义与`app_runtime.h`说明 |
-| axis_status_word / 板级故障 | TIM1 正常发布、故障入口置位 → 调试读取；静态 32 位状态字/故障量 | 状态字保留 FAULT，现有临界区内发布；它和其它 Watch 字段不是同一原子帧；board_fault 仅置位 | `axis_status.c:5/12`；`axis_status.h AXIS_STATUS_KEEP_FAULT`；`board_safety.c:88` |
+| axis_status_word / 板级故障 | TIM1正常发布、故障入口置位 → 调试读取；32位观察量 | TIM1用私有阶段Getter判断对齐，仍在最终输出后发布并保留FAULT；观察不授予许可，与其它Watch非原子帧 | `AppRuntime_FastISR`；`AxisStatus_Publish/LatchFault`；`BoardSafety_LatchFault` |
+
+FOC阶段接口`OpenFOC_GetRunPhase`仅在初始化/TIM1同一所有者上下文调用，两私有字段的读取不是跨任务快照。先判无command为IDLE，再按对齐计数派生ALIGNING/CLOSED_LOOP；`foc_aligning`只是兼容镜像，定义、Init、无命令慢拍为0，每次Apply刷新。阶段不证明输出已使能或电机转动，FAULT仍由板级锁存；最终门禁撤销先关输出、FOC复位仍在临界区外完成。详见[006](specs/006-axis-run-phase.md)。
 
 遥测保持两列三位小数CSV及CRLF；按binary32位模式做有界整数转换，最近值/中点取偶，保留负零，不调用printf或分配。NaN/Inf、编码越界或容量不足返回0并保留目标缓冲，调用端计丢帧；编码范围不代表电机运行范围，不保证所有MicroLIB舍入模式逐字节等价。`telemetry_format.c`必须加入两个Keil目标的源清单，`telemetry_format.h`须在包含路径中可达。
 
@@ -154,7 +156,7 @@ FreeRTOS 自带 Idle 和 Timer 服务任务不是额外业务任务，依据 `ta
 | RTOS heap / appTask | `ucHeap`仍为16384 B，实际地址见本轮005 map记录；appTask 4096 B 栈运行时从此堆分配，不能再计一次静态 RAM |
 | 中断栈 / 内核任务 | MSP仍4096 B，实际地址见本轮005 map记录；Idle/Timer 静态栈 512/1024 B、TCB 各 92 B；启动 C 库堆配置 512 B 但已被链接剔除 |
 
-项目依据 [FOC_T.uvprojx](../MDK-ARM/FOC_T.uvprojx) `uAC6=0/useUlib/uC99/uGnu`；scatter 由 uVision 生成（`useFile=0`），实际 `.lnp` 引用 `MDK-ARM/FOC_T/FOC_T.sct`。当前完整版本指纹与 map 摘录见 [005 本轮构建记录](validation/005-command-bench-20261109.txt)，可复现全量/增量及独立策略检查命令见 [003 第4节](specs/003-c-port-architecture.md#4-构建语言标准与内存审查快照2026-11-06)。静态容量足够不等于最坏运行栈已经安全。
+项目依据 [FOC_T.uvprojx](../MDK-ARM/FOC_T.uvprojx) `uAC6=0/useUlib/uC99/uGnu`；scatter 由 uVision 生成（`useFile=0`），实际 `.lnp` 引用 `MDK-ARM/FOC_T/FOC_T.sct`。当前完整版本指纹与map资源见[006构建记录](validation/006-axis-run-phase-20261110.txt)，005原map摘录留作历史；可复现全量/增量及独立策略检查命令见 [003 第4节](specs/003-c-port-architecture.md#4-构建语言标准与内存审查快照2026-11-06)。静态容量足够不等于最坏运行栈已经安全。
 
 ## DMA 与 cache：当前现状
 
@@ -166,6 +168,6 @@ FreeRTOS 自带 Idle 和 Timer 服务任务不是额外业务任务，依据 `ta
 
 ## 尚未闭合的边界
 
-整组命令交接和两项时序修复已实现；禁输出命令演练/空闲统计已获得有限截图支持，具体见005；真实通信RX、完整Axis生命周期、ADC/角度/PWM对时尚缺实现；最高机械转速、实际电机/旋变极对数、允许电角误差尚未确认。当前输出准备毛刺、故障关断延迟、Break 硬件路径、最坏 ISR/临界区/MSP/任务栈，以及带输出闭环均须独立验收。
+整组命令交接和两项时序修复已提交为1d3f101，005有有限截图支持；006只读FOC阶段接口及待机镜像已实现/编译/HOST通过，四项禁输出待机/演练观察已通过（用户截图，不含运行时长和板端版本回读）；真实通信RX、完整Axis生命周期、ADC/角度/PWM对时尚缺实现；最高机械转速、实际电机/旋变极对数、允许电角误差尚未确认。当前输出准备毛刺、故障关断延迟、Break 硬件路径、最坏 ISR/临界区/MSP/任务栈，以及带输出闭环均须独立验收。
 
 继续工作以 [当前入口](README.md)、对应 spec 和版本化 validation 为准。新增方案先写 spec；实现并验证后才更新本页的“当前事实”，旧截图和旧构建记录原位保留。
