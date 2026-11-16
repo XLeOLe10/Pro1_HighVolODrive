@@ -6,6 +6,7 @@
 #include "board_config.h"
 #if AXIS_COMMAND_BENCH_ENABLE
 #include "axis_command_bench.h"
+#include "can_link.h"
 #endif
 #include "board_safety.h"
 #include "current_sense.h"
@@ -244,6 +245,9 @@ void AppRuntime_TaskStart(void)
     last_diagnostic_tick = last_telemetry_tick;
     app_heap_free_bytes = (uint32_t)xPortGetFreeHeapSize();
     app_heap_min_free_bytes = (uint32_t)xPortGetMinimumEverFreeHeapSize();
+#if AXIS_COMMAND_BENCH_ENABLE
+    CanLink_Init(); /* startup only, before periodic acquisition begins */
+#endif
     CurrentSense_Start();
 #if AXIS_COMMAND_BENCH_ENABLE
     AxisCommandBench_Init(HAL_GetTick());
@@ -282,6 +286,7 @@ void AppRuntime_BackgroundStep(void)
 #if AXIS_COMMAND_BENCH_ENABLE
     work_timing.acquisition_cycles = (uint32_t)(DWT->CYCCNT - entry_cycles);
     CaptureSampleGap(entry_cycles, gap_before);
+    CanLink_Poll(); /* bounded link service, after resolver sampling */
 #endif
 #if (BOARD_POWER_STAGE_MODE != BOARD_POWER_STAGE_DISABLED)
     if ((power_pwm_prepared == 0U) && (CurrentMonitor_IsReady() != 0U) &&
