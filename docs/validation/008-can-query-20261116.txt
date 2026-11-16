@@ -1,0 +1,456 @@
+008 READ-ONLY CAN QUERY -- 2026-11-16
+Recorded at: 2026-11-16T17:28:16.861898+08:00
+HEAD: 350ef94a13b7b200bcfa434352eec5fda2359eed
+Branch: Xiao_ODrive
+Scope: 350ef94 + 008 working-tree query codec/service/provider and HOST tests.
+SRC PASS (independent review), BUILD PASS both incremental -b, HOST PASS, HW NOT_RUN.
+No stage/commit, download, reset, run, or power operation performed by the agent.
+User's existing 007 hardware evidence does NOT validate this new image.
+
+Protocol: custom diagnostic v1, standard classic data ID321->322 DLC8, 500 kbit/s.
+Request: 51 01 opcode token 00 00 00 00; reply: 52 01 opcode token uint32_LE.
+Ops 01 INFO=0x0001001F, 02 diagnostic status, 03 latched fault, 04 BUILD=0x00000801.
+BUILD is a manually maintained interface release, not a Git/AXF hash.
+STATUS captures five mirrors without preemption; NOT one control/sample epoch/current authority.
+Null provider latches init CONFIG failure. Only valid STATUS/FAULT call provider.
+ReadCanStatus saves/restores PRIMASK and records bounded copy cost in existing diagnostic.
+No CAN submission/STOP/fault-clear/watchdog feed/output writer. Existing automatic Bench retained.
+Existing DLC-before-HAL guard and <=1 RX/1 TX per Poll unchanged; no DMA/new task/heap/retry.
+Counters: can_link_rx_count=PINGS only; can_query_rx_count=valid queries, even if TX full.
+Rejected count covers software-discarded frames; hardware-filtered frames may never be counted.
+
+HOST: real codec and real service + mocked HAL/registers/provider. Not silicon/concurrency timing.
+Protocol: 24507 assertions PASS; service: 32 scenarios, 882 assertions PASS.
+Existing Cygwin FAST_CWD warning occurred; no C compiler diagnostic failure.
+CRLF preserved in firmware/tests as indexed (-text); use git -c core.whitespace=cr-at-eol diff --check.
+
+Commands (cwd repository root):
+tests/run-can-host.ps1
+tests/run-can-service-host.ps1
+D:\UV4\UV4.exe -b MDK-ARM/FOC_T.uvprojx -t FOC_T_CommandBench -o build/008-can-query/bench-build.txt
+D:\UV4\UV4.exe -b MDK-ARM/FOC_T.uvprojx -t FOC_T -o build/008-can-query/normal-build.txt
+No Rebuild All was used. Both targets recompiled only app_runtime/can_link/can_link_protocol.
+Separate outputs; normal-target source/flags unchanged outside conditional Bench code.
+Compile-time negative configuration checks: NOT_RUN this iteration (no configuration rule edits).
+Control-core/FOC algorithm suites: not rerun this iteration; those implementation files unchanged.
+
+TARGET FOC_T_CommandBench
+Compiler: 5060960::V5.06 update 7 (build 960)::.\ARMCC
+Defines: USE_PWR_LDO_SUPPLY,USE_HAL_DRIVER,STM32H750xx,AXIS_COMMAND_BENCH_ENABLE=1,BOARD_POWER_STAGE_MODE=0
+Project source counts {'.c': 61, '.s': 1, '.cpp': 0}
+Total RO  Size (Code + RO Data)                65656 (  64.12kB)
+Total RW  Size (RW Data + ZI Data)             25984 (  25.38kB)
+Total ROM Size (Code + RO Data + RW Data)      65764 (  64.22kB)
+SHA256 MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.axf 950a63e1ddf77687eb5278a471048b387d602e2426c6a85284e53cb2a7b9e40d
+SHA256 MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.hex cbe668434df91ed53400963f7340f0ec3af7416b7d85664d1a46715fb24f330e
+SHA256 MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.map 4d571cc5e6c0182863fe8ca2aef557b6eaf7468f5d111473267b1033120cbe85
+SHA256 MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.sct 1cd561d34115cb611838e3c46a3073336004f0ee0db6185ce1cd10e8ee168235
+SHA256 MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.htm 10b474c997173ab9195fe5e383488de0a8dccaebeebd1b7c2b2019c53515d475
+Static callgraph excerpt (not runtime worst stack): ReadCanStatus (Thumb, 80 bytes, Stack size 16 bytes, app_runtime.o(i.ReadCanStatus)) [Stack] Max Depth = 16 Call Chain = ReadCanStatus [Calls] >> RecordCriticalCycles [Address Reference Count : 1] app_runtime.o(i.AppRuntime_TaskStart)
+Static callgraph excerpt (not runtime worst stack): QueryValue (Thumb, 96 bytes, Stack size 32 bytes, can_link.o(i.QueryValue)) [Stack] Max Depth = 32 Call Chain = QueryValue [Called By] >> CanLink_Poll
+Static callgraph excerpt (not runtime worst stack): CanLink_Poll (Thumb, 388 bytes, Stack size 136 bytes, can_link.o(i.CanLink_Poll)) [Stack] Max Depth = 184 Call Chain = CanLink_Poll ⇒ HAL_FDCAN_AddMessageToTxFifoQ ⇒ FDCAN_CopyMessageToRAM [Calls] >> HAL_FDCAN_GetTxFifoFreeLevel >> HAL_FDCAN_GetRxMessage >> HAL_FDCAN_GetRxFifoFillLevel >> HAL_FDCAN_AddMessageToTxFifoQ >> CanLinkProtocol_QueryOpcode >> CanLinkProtocol_MakeReply >> CanLinkProtocol_MakeQueryReply >> QueryValue >> PollErrors >> LinkError >> __aeabi_memclr4 [Called By] >> AppRuntime_BackgroundStep
+Static callgraph excerpt (not runtime worst stack): AppRuntime_BackgroundStep (Thumb, 204 bytes, Stack size 40 bytes, app_runtime.o(i.AppRuntime_BackgroundStep)) [Stack] Max Depth = 376 Call Chain = AppRuntime_BackgroundStep ⇒ AxisCommandBench_Step ⇒ Submit ⇒ AxisCommandPort_Submit ⇒ AxisCommand_PublishValidated ⇒ TimeValid [Calls] >> CurrentMonitor_IsReady >> CanLink_Poll >> BoardSafety_PowerOutputsAreDisabled >> AD2S1210_Run_1kHz >> SendTelemetry >> CaptureSampleGap >> HAL_GetTick >> AxisCommandBench_Step >> xPortGetMinimumEverFreeHeapSize >> xPortGetFreeHeapSize [Called By] >> StartAppTask
+
+TARGET FOC_T
+Compiler: 5060960::V5.06 update 7 (build 960)::.\ARMCC
+Defines: USE_PWR_LDO_SUPPLY,USE_HAL_DRIVER,STM32H750xx
+Project source counts {'.c': 61, '.s': 1, '.cpp': 0}
+Total RO  Size (Code + RO Data)                60584 (  59.16kB)
+Total RW  Size (RW Data + ZI Data)             25712 (  25.11kB)
+Total ROM Size (Code + RO Data + RW Data)      60684 (  59.26kB)
+SHA256 MDK-ARM/FOC_T/FOC_T.axf c0f777239ce0afae85b64d2e7311cdd9b57595757fbd004db1e02028390e4a7c
+SHA256 MDK-ARM/FOC_T/FOC_T.hex 861296d7a904f0afeba89096e5fbc963d109a68d77144b4120af8f48edba9137
+SHA256 MDK-ARM/FOC_T/FOC_T.map 55b780a942df4d8e59527075cece839ffb7edf92aa9c559036a403a2437af881
+SHA256 MDK-ARM/FOC_T/FOC_T.sct 1cd561d34115cb611838e3c46a3073336004f0ee0db6185ce1cd10e8ee168235
+SHA256 MDK-ARM/FOC_T/FOC_T.htm e73a34d1f40f8268e9b20e56f2a6f120e1b49a270376a59d58f8c6392713a0a9
+
+RAW LOG build/008-can-query/bench-build.txt SHA256 8798e1b499b0d775bb983bdc7941bf66d957607cd58cd08932070bc81acc9548
+*** Using Compiler 'V5.06 update 7 (build 960)', folder: 'D:\ARM\ARMCC\Bin'
+Build target 'FOC_T_CommandBench'
+compiling can_link_protocol.c...
+compiling can_link.c...
+compiling app_runtime.c...
+linking...
+Program Size: Code=64752 RO-data=904 RW-data=924 ZI-data=25060  
+FromELF: creating hex file...
+"FOC_T_CommandBench\FOC_T_CommandBench.axf" - 0 Error(s), 0 Warning(s).
+Build Time Elapsed:  00:00:16
+
+RAW LOG build/008-can-query/normal-build.txt SHA256 43c2337e8b864cff6e893404cecb0dfecd56c999915b9813e235578305a21374
+*** Using Compiler 'V5.06 update 7 (build 960)', folder: 'D:\ARM\ARMCC\Bin'
+Build target 'FOC_T'
+compiling can_link.c...
+compiling can_link_protocol.c...
+compiling app_runtime.c...
+linking...
+Program Size: Code=59680 RO-data=904 RW-data=776 ZI-data=24936  
+FromELF: creating hex file...
+"FOC_T\FOC_T.axf" - 0 Error(s), 0 Warning(s).
+Build Time Elapsed:  00:00:13
+
+RAW LOG build/008-can-query/protocol-host.txt SHA256 0a89ead95f4b269fcf1841c163324fea31b605a8a973d5179fa006c7e7204966
+      0 [main] gcc 142420 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+gcc (GCC) 4.5.3
+Copyright (C) 2010 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+      0 [main] gcc 171716 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+      0 [main] can_link_protocol_host 175076 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN protocol HOST PASS: 24507 assertions
+HOST CAN protocol suite PASS
+
+RAW LOG build/008-can-query/service-host.txt SHA256 762ea98aedf7f1af73608cfded8932a74e9061d575b71104a83511dc14d3725d
+      0 [main] gcc 175092 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+      0 [main] can_link_service_host 169036 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service valid: 33 assertions PASS
+      1 [main] can_link_service_host 174956 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service lengths: 86 assertions PASS
+      0 [main] can_link_service_host 151308 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service rejects: 50 assertions PASS
+      1 [main] can_link_service_host 174192 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service busy: 23 assertions PASS
+      1 [main] can_link_service_host 20352 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service rx-fail: 20 assertions PASS
+      1 [main] can_link_service_host 14256 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service tx-fail: 26 assertions PASS
+CAN service errors: 24 assertions PASS
+      0 [main] can_link_service_host 164328 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+      1 [main] can_link_service_host 17296 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service busoff-ir: 20 assertions PASS
+      0 [main] can_link_service_host 165460 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service busoff-psr: 19 assertions PASS
+      0 [main] can_link_service_host 16704 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service ram-error: 20 assertions PASS
+      0 [main] can_link_service_host 24640 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service bad-index: 17 assertions PASS
+      0 [main] can_link_service_host 174404 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service overwrite: 17 assertions PASS
+      0 [main] can_link_service_host 167080 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service query-valid: 89 assertions PASS
+      0 [main] can_link_service_host 155216 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service query-status: 75 assertions PASS
+      0 [main] can_link_service_host 17168 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service query-rejects: 110 assertions PASS
+      0 [main] can_link_service_host 174320 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service query-dlc: 72 assertions PASS
+      0 [main] can_link_service_host 114040 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service query-busy: 25 assertions PASS
+      0 [main] can_link_service_host 82796 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service query-rx-fail: 22 assertions PASS
+      0 [main] can_link_service_host 161844 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service query-tx-fail: 29 assertions PASS
+      0 [main] can_link_service_host 153160 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service query-busoff: 17 assertions PASS
+      1 [main] can_link_service_host 174120 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service no-provider: 6 assertions PASS
+      0 [main] can_link_service_host 152912 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service bad-config-0: 4 assertions PASS
+      0 [main] can_link_service_host 175076 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service bad-config-1: 4 assertions PASS
+      0 [main] can_link_service_host 161284 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service bad-config-2: 4 assertions PASS
+      0 [main] can_link_service_host 152832 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service bad-config-3: 4 assertions PASS
+      0 [main] can_link_service_host 116520 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service bad-config-4: 4 assertions PASS
+      0 [main] can_link_service_host 174924 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service bad-config-5: 4 assertions PASS
+      0 [main] can_link_service_host 157168 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service bad-config-6: 4 assertions PASS
+      0 [main] can_link_service_host 174540 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service init-fail-1: 10 assertions PASS
+      0 [main] can_link_service_host 166784 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service init-fail-2: 13 assertions PASS
+      0 [main] can_link_service_host 174136 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service init-fail-3: 15 assertions PASS
+      0 [main] can_link_service_host 171212 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service init-fail-4: 16 assertions PASS
+CAN service HOST: 32 scenarios PASS
+
+INPUT FINGERPRINTS
+Firmware path set reused from 007 manifest (no source list/header additions).
+187 files, UTF8/LF manifest SHA256 a1c518744beaefb9ddb41053729748481016b7478bc71b627b9982fa68d81a67
+2626d799e93ce8b0204d4d8ccc871301ac775b0817cf1cba3c884181d3a2bcfa  Core/Inc/ad2s1210.h
+e36acfe1b822eff1de7e9f93073b8da32c94dd5b09484b716e190c6aa63eb3d0  Core/Inc/adc.h
+d3be7141aa698c1e1cb85b5871671c5a2a1b9fde77f2bd535407fb6cf1ccfed8  Core/Inc/app_policy.h
+24beb149468339520540f39cf1c4bcad9da5b8e30ef46cf4613ca512206e891f  Core/Inc/app_runtime.h
+f4e21847e3f3bdfd441db3edec7a987d6c2c5ef1d8b995c006b5a161113c1079  Core/Inc/axis_command.h
+0ef8c408d9167580553b2873ef72fee05eaa8bb617f65cf7cafcf99344b35ab2  Core/Inc/axis_command_bench.h
+d74fe8d9c30bdf5bea508d8c8ed4b4d542b5be9e900d28b2e37c55a3461d4692  Core/Inc/axis_command_core.h
+7672d284d376a1f636fa85e7c092fb4b7613493382e584023bf5ead5a6e1d2ab  Core/Inc/axis_status.h
+9100c8d19c328b70a433476d810aabd8247c45df4152e667733f0bf0e861f30a  Core/Inc/board_config.h
+7c4b7d0091677adb66583a0bc92e6de98b5cb035cf6421234acbdd6dd21ef1bb  Core/Inc/board_safety.h
+1d9152f9fa7a8d711a90f24cd139c96e4d397077a2d76ff2ca54dbc9e34fb3d0  Core/Inc/can_link.h
+ea9a6796c76130577182bcea1d43f75de94b2d81c3b373fcffcaf43ac45a00cf  Core/Inc/can_link_protocol.h
+7c7fd96f56582b2072085f01281925c9cbbc4c517c035c93da8b919ec8cf5209  Core/Inc/current_monitor.h
+bb9c2893bb03d3eae2e843e22fd799822b56731dfbd4cb15d36d4f7cdbbd34de  Core/Inc/current_sense.h
+3e9c0a58db27c4b325f875b8ce28c73e2114342ff67f59def3098bc291f571a9  Core/Inc/fdcan.h
+1be63ae9823901bf7a9d16d69458d9e2a67796001b383c841240bf4b294d3e12  Core/Inc/FreeRTOSConfig.h
+e2d62f964a0b7f238384ed6a20a181d09df9647240a268dc547acf5b35099f74  Core/Inc/gpio.h
+ac84bb9aa36cc4ce607c37031c90451cb8c2af024cfa520e73824fdda34fa206  Core/Inc/main.h
+bbc397468b0db653c7d01badaa9f202a34b699476ffa6cdfde8a929870245fab  Core/Inc/open_foc.h
+7ee08a1f7b3c518b8f1a33e73ee2d18830c1336be9341e774e73f137984491d8  Core/Inc/spi.h
+f6140475363886220c09144786efcf7ea806b402064d14ff16715191493eb40e  Core/Inc/stm32h7xx_hal_conf.h
+b79c96b9547cdc2ab4b4d06949a0f38c69cf58961c5372e49809c010625a26f5  Core/Inc/stm32h7xx_it.h
+c42a3f9267a7b8525d9d5e068d9759c7ed2e1d4ff3cf5792147a662c16fa5819  Core/Inc/telemetry_format.h
+9a14d52571fd5da86fd2013778bd509f1bfa506baaf0997b555eeeb5f00424aa  Core/Inc/tim.h
+b57eee246dfa6d43d3188845b3f5a21ae2fff22ccfc58317d6e51a26e994cbbb  Core/Inc/usart.h
+e78964121de15301dd0ac1930d28731a098ed76e2071a4f7ded8dd35102f5e38  Core/math/Xmath.c
+e4964a56a59e7e7135c224ad62e553440ed9232028224bc3de32e196a42894d0  Core/math/Xmath.h
+77c9dd8b9470ae5c81cadc17ae303f1d23e9ccaa9183b90ce89223d2bce174ae  Core/Src/ad2s1210.c
+b9fa07c9454db6a3328054e0cf6e968d3d7f9381444c0184ae4be546ed933e39  Core/Src/adc.c
+109404603bb66cf06735c76ff1abffe9fb8ba2910399828894bcbf427fb97f89  Core/Src/app_runtime.c
+5f1f4a9df1e64e697561dd83bbb34a268c0c614288c18fea9a033f45ac405201  Core/Src/axis_command.c
+4309354ffb956e0105ad4d1f889e79d30d73ad9f3ea436aeebc1a7845982daa0  Core/Src/axis_command_bench.c
+7a7f6198d17a06c75cb4b63d5ef97a9eb248e758c09c0848bf14b877140c930a  Core/Src/axis_command_core.c
+097424ef92a573dc910baee11b4dd95cae4c043408a18aecd9e63a050e332cdb  Core/Src/axis_status.c
+1fa33a84c0c29cb73838940c2dfab96b0f6b5bf6f602760f53921ab69a723926  Core/Src/board_safety.c
+39ac134a91326d3d2bf6056bed20e3f0c87f433b08965e1dab05b65a7beb8dd6  Core/Src/can_link.c
+542cf477321ccfbdc35941c099d245c30542c4c4a8ac9bc3b07efec49785c2c6  Core/Src/can_link_protocol.c
+f7289c7167a8652ed92932dea42466907f68204d4623686119c8c7ebacc42d1c  Core/Src/current_monitor.c
+baec2fde6b801e013510e8de5b96c0e2b48f79b6217c6665cb730f18492c9e71  Core/Src/current_sense.c
+43a5930f45419cadc01fbc48aa240320ba89e5cdb872ac9822902186094d0722  Core/Src/fdcan.c
+6bea976f89ce73634cfd16b2d31adc33335702635289bed02da505a38d4825e7  Core/Src/freertos.c
+9bb87d4c22767d84ccdd2d8e0adf7fcccdb2e5b06b705860afe3a7bb23910551  Core/Src/gpio.c
+e7b718a54e4c0dfcda11f410df885c5f03cb6827e26c451ce354c754224c7e0e  Core/Src/main.c
+6f2c934773baa9caf6c287fca3ad122b37d8847c0cd6b832a74fbb708d756e61  Core/Src/open_foc.c
+bb034ce7995718329d99426ad6dcd80c288ad1bfe8e056401bb672fe1c8c9e91  Core/Src/spi.c
+68a4dc02d0cf8c38ff4196f30b8079d614eb6ec98a38d89650ff7ba75e4db3f5  Core/Src/stm32h7xx_hal_msp.c
+2578954b6c15ef60203c62c09e3184b06b40c717624dabdd83ed182ba81f015f  Core/Src/stm32h7xx_hal_timebase_tim.c
+bf2533d4e7e319457f78570be374a42b624a6d5ab06797596dc4accc099c6256  Core/Src/stm32h7xx_it.c
+2ea5c2bd1c55e454fcbe26612c0b2a57f321fffb857ccd92844682288dd62518  Core/Src/system_stm32h7xx.c
+aa2e8d7773dca6d83086e74048057c117e5b91368002150a0a1c289a84e97a2d  Core/Src/telemetry_format.c
+f82e8ec5f68fdb49837a2b083494550e9d7ca0bdb786da126beda8c0f5d72604  Core/Src/tim.c
+9574d08633306beceb86d12f4f5e62c19ac9978d8f0ca266970a895758b118e9  Core/Src/usart.c
+7caed5502c7b277eb53f8f4af40ff7f26ffccfc6b7648e6223dab869382d1a20  Drivers/CMSIS/Device/ST/STM32H7xx/Include/stm32h750xx.h
+9bad4fffca7a09b179e6be9d55204eff634cda7e2cec620a79002f6f4d0e0bcf  Drivers/CMSIS/Device/ST/STM32H7xx/Include/stm32h7xx.h
+edbd2ae253530241ca82470fde1db4de1b0ba856590d69b17d3342b952c1fcba  Drivers/CMSIS/Device/ST/STM32H7xx/Include/system_stm32h7xx.h
+5a80286d68d0b4478895a222da683c8ca561d3bcf6392aaaea225d4a117c843e  Drivers/CMSIS/Include/cmsis_armcc.h
+e24f4bd1548b94e0ad424f4f13f59a4db4ca5aad7b644d10a893a330775d3003  Drivers/CMSIS/Include/cmsis_armclang.h
+e8f040e9ef61e466cc751677ab3c413a463cb74d1fc33fb6dfd94225bd93c8c1  Drivers/CMSIS/Include/cmsis_armclang_ltm.h
+b51963d271c1571ca3463654c76aa7ea50c4eac5d0a2710df10414ac64d9e0f8  Drivers/CMSIS/Include/cmsis_compiler.h
+1fba3e120e5c0a439e0982bd37fae04bd033dbd14187428214462a1707c56252  Drivers/CMSIS/Include/cmsis_gcc.h
+820bcd68b0a92f97abf5cdde6413e5e842fb286e0514be2c1be1547bb2dd2e7d  Drivers/CMSIS/Include/cmsis_iccarm.h
+1b2c47a90e9ae741c8fd4d0f323495327b25ff5d555a6c7afd6749a65ba1bb8e  Drivers/CMSIS/Include/cmsis_version.h
+b4bc83a6ff10fd2fb7e4c0abefdbd447eb7f78f3db898ca9aac5676307e2b862  Drivers/CMSIS/Include/core_armv81mml.h
+74b92c994af7355e222b45a0342754840b7221b611ef95bd206345879cc2caaa  Drivers/CMSIS/Include/core_armv8mbl.h
+77255f30508cf0d225f8b72207e28bf81353f8b353e8b120132c6db7e9bead9e  Drivers/CMSIS/Include/core_armv8mml.h
+52e8826259be4fcb10d0de2d3655c24d52436e54cd1509f3beb1a31a45524f38  Drivers/CMSIS/Include/core_cm0.h
+36e9aec815eef944241e5fed7085845346de6bcb5ba30561f956356b393ba5f0  Drivers/CMSIS/Include/core_cm0plus.h
+944bf0c4f940eef30a632cd99d5dcfe8270e8a8431eb98c0f081bcf4f61f728e  Drivers/CMSIS/Include/core_cm1.h
+f04d3e5f385b0ff219a75f6648acabf7debb779a72f0628573b64dac5ad49fdc  Drivers/CMSIS/Include/core_cm23.h
+0191499015f3af7b37ce83092df29d1d63dbba9fa5f31b6d2341a2e850b20cb4  Drivers/CMSIS/Include/core_cm3.h
+3566c5bf835091b1cc46baf6e9b6ce94d83dd0885e0db122f43e901e9326945a  Drivers/CMSIS/Include/core_cm33.h
+1f6da4c033261293acb8f0a7da42a0e9b6ab392c9462cc26f5e3e35d4db4e2d3  Drivers/CMSIS/Include/core_cm35p.h
+53d609b900c262650fcaf5a48eabd0fa299c3ac4d1426eb0f20e2aab053f8abb  Drivers/CMSIS/Include/core_cm4.h
+34d91327a5f1b251c54fa6bb532d9f5ec0423bf3b7f2b679c8f7b3df95af0fc8  Drivers/CMSIS/Include/core_cm7.h
+cc9037b32401824436d251de860799fcdbab3cf69e2321438c8f446f3f342526  Drivers/CMSIS/Include/core_sc000.h
+e6a78d85b3ca77e35dc512e32e535028a46e156adab8629360fa4b7fe6731827  Drivers/CMSIS/Include/core_sc300.h
+c9ad7cc99ba0481365550ae997c63cde9732d067d9ec0de28b0d6ac39280656d  Drivers/CMSIS/Include/mpu_armv7.h
+53f9e848af62ea8704f463992e4d65c7c79fc72cfd8fab6fa14adc73478b0afd  Drivers/CMSIS/Include/mpu_armv8.h
+45565c8cb04c653aabaf3cceddfc848b6a0de28c20d4f7e3d475a992c7eee788  Drivers/CMSIS/Include/tz_context.h
+7fff96faed90c81364225132389b1865f67ceac8e65381b60459264c4136ee6e  Drivers/STM32H7xx_HAL_Driver/Inc/Legacy/stm32_hal_legacy.h
+97aeb9e9e0c3acde0c91d025e89c7972b9ad13ab3cb735d40ad852dc395f6980  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal.h
+7a67f8a941d0d6e1803a2d59e3f4134c1e863f62142a2ff42b35a1761b1b42b0  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_adc.h
+5f54fbf0716a5aabe1fab44acaa65553bbc96538038bdb629e7a203cffad6332  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_adc_ex.h
+8b61853cb8eb65dabf5181e9f4a2effb3be70974800f6ddc38ae62f0310e78ae  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_cortex.h
+f7e6ad2cff1b770393ad76961fbb220bef0a52593e9035746e7961137061ebfc  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_def.h
+564d6d26015155743f4990a354d26124d5d434673813c75df5da9572e4ac2eae  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_dma.h
+bc906d5cf9ed149185aa77a80a793e50aa4b2c7e0606f88df1a4b8900a8a26fa  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_dma_ex.h
+24a13bdf1e9010068e8bb123c28421f4e009c86ab949ca5df86a7065a96f0498  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_exti.h
+a50c2a825716267483c905d8689bf387f8314f37e56999dee05ea7b77f3d02c4  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_fdcan.h
+96340bb9572f6c53554323795b3aa8c86962d14b0596dab550322f34dfccba7c  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_flash.h
+a5634068e887b72f39c9f18816d5ca4534b1c0103c9847db5067dd866fa42ba6  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_flash_ex.h
+75c7e634ec0b5fa2ad6ef90b9b010a4dbac1cdd9876daf80cab2253774c092bb  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_gpio.h
+81b441ab0ef72718230fc3b259a120c57e253018863d9aa9e50f4f6456c866f3  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_gpio_ex.h
+9375fc3023cde3f3ccf0a77a21d571d63acbe47f23149c2f226972cecdffdc6f  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_hsem.h
+6741b4870c9e870e3293996b968419b7edbd2c3477183e44663086ec6f069398  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_i2c.h
+445dcca6512f91fa60903605c52f19c2792e3d00e6eba9db3a234901a9dd8c40  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_i2c_ex.h
+580b7f7d97482fe435f5c3c4086f017a090ba186201db2af7c68567094e868e8  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_mdma.h
+65a883328691a724d5163403e5e7db38d5a1e8ec11f7bdcf5620329bf779cdfa  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_pwr.h
+76ec9d62421667db5a499309f50c8145d086d76b5529a7ece37331fe5de05842  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_pwr_ex.h
+27c198869e9a02d059427189d0897130172c10d64a8c993cb57ee9231ebd44cf  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_rcc.h
+cbebc9c87db8acada7da2fd06994a998528d447960ec62737fd65cace4fd34bf  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_rcc_ex.h
+9ea983fd0e3148a3291b2aa56b1d01709374a3a3845d6b592b3d3356b71f6cb5  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_spi.h
+44d854991d118840677da5ce86d88b1e555fe811808354522ad2f198ac4fa66c  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_spi_ex.h
+90eaea9d79e3e69afa3d1ef8758a07ef8809eab28e6502e46d15201f8ffa7c38  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_tim.h
+c6e76b135cc6bff07ad4b84a76d7eedb3a63ddba472131595c4655ac37ed7196  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_tim_ex.h
+4065a1e1b21da22b6ee74e6549d573ea4c0930e744ce923a776cfc3f35383bd7  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_uart.h
+99756f731f50013b1344f8ea0d1a0259ccacd5e085fb7477080c215dcf343841  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_uart_ex.h
+cb252eef4c35038adc1ed634b7acdb7067e4984ef7f399eb6432916756481920  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_adc.h
+0eb42ffbba51192ec0efd6463759a5fda060637ff4d694274df16b4763c882a5  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_bus.h
+e6781bfcc812a315006a5ea9ed0f0eb7db19beb095bce5136c345e0af4caed1c  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_cortex.h
+cb7133e48358f5cd50119c8b88c4a59634dad521f489448e04602c9efd9d2972  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_crs.h
+3cf0adf0da04435eb89743523a7f9e6a23a18fd6133afed7c808acef9ee0aa76  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_dma.h
+74cdd7b811aa394274ba645d05ae410d417f0e3836d91194e58156960d68a2ea  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_dmamux.h
+6eee9e7ba6b688c5c848e8f318b7adc293347a4697a888cfaadc9a2cd654cc5b  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_exti.h
+3a84cb663d59954ce2a057ee58793890579b4ef15af37c8f043190b0a82c9093  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_gpio.h
+7e2cc95c8dcd6b326801026d0398a46b903c94e4c3befd650a227e9a351606c2  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_hsem.h
+272862ad6036ead74e88306b08ed0870c44f866617328beabb505038be9af6ba  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_lpuart.h
+fd20ad8efbceb8ad7169e92a365385759fc1331157a94399d9e8328e32c8a564  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_pwr.h
+811ac8f472d426f2d7542d1e5987f1771035637bbdf69d9197f02cd52bb9f2e9  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_rcc.h
+637d0822e248429fd87182786f1e727860dc52645440405642e08f5df13bf565  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_spi.h
+b8fa6b6b051d961eea8b74d62b1f70849ab029b112d99c3d4955400392d78462  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_system.h
+c4547de1d0e4825dc91d40bd4e9af5cc4d5eff16357c1601fc9127c8aea3f7c3  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_tim.h
+137553753bb69d630d93751f895b3951be03c7a30862a31ac60e94355ce81bde  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_usart.h
+02f36cc8124209b5045c10a4063a7e5f4f92fb1eeb1d29f1104d94cffcbde2a5  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_utils.h
+3e46894e1870c682b6362c0536d5a5ded6cf5541f54559e5cc591e90352f0bfc  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal.c
+f816ffa452a24e62b8c3cf681f5658bbf1a383327022fbeb7faf5c7815a9f85c  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_adc.c
+d6e09ac1293ae3d20806fa04b9abd162144c6b6fc57c4e8d87c11b97c71ba0b6  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_adc_ex.c
+9df95c02feab163763ac752c17c07f0a10f6bd7d303f659e950dd8b6b4cce2c9  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_cortex.c
+e1b72f89360c46185e557e9ae3ad9c0b36978130dbf010ac54a089a850a9d2cf  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_dma.c
+a8bc1642a339acba8aaa7be9101854ab36319efcf2a3ba299760451af31585d1  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_dma_ex.c
+90865afce1c097a4760b197f1c23f602edab2cfd75f19c1d56a14f02e5042411  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_exti.c
+beb1ee442655f607984b1df1bed4caf99dc50a00ea0670c72c917b65aa1657ee  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_fdcan.c
+f5d7fae3a1dce51e81c099a48a39c2076ee79932a7d369a76a2dd1d5b0e8103f  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_flash.c
+aea2f7cf88a97ff6e9eb6afd542ee9aa1f1be2946db834625df176f2a383497f  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_flash_ex.c
+e8cb800d746479f9b768e6845dfd2c84867a0b264101afb21f5ad799e3a65ae2  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_gpio.c
+9878195481869a883edb4c2c4e5f62b7f5764ffbb517bd38a2fae4e2150f8eb0  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_hsem.c
+c627ab3ee0f7d2989ffaa9e078ebda279b8be1b16a98362b51e804e63c8346e4  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_i2c.c
+a6c182468b914f37b8f74e2d3ba0f8d4d6cbf59efe3bf99d9739007a1d7f37d5  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_i2c_ex.c
+674d7a273d208509e2941cb88d9419f549cbdfd35d4aa81b2da135bf1c1a30ad  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_mdma.c
+87dc25ff1b0a58773eeed5a87de133167cfe4306bf54aa884889a61d8a5bd7f4  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_pwr.c
+15469705b458ee696d3ca241ea85ec371c2463a5ac629ab9078d2912dab19c8c  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_pwr_ex.c
+99c51eaf3e01a9040e3080b2d0f537fd546e63792b571f74fc39bdc481d82116  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_rcc.c
+ba3ffa42989a60a93e8de7f148cde4fa22c6853223d00d5d9954ad370c6012fe  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_rcc_ex.c
+862a531faa657484a7af61412387f146587e4430cbfdcf104749f48683ab419c  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_spi.c
+d7262bb17d9c4949ff4be52cb287ab823415ea59019ed89a4750d6c5c1997988  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_spi_ex.c
+a629504942e13c443324ebf9efa301a003ce2880c57b7aeb59bff5a643ec829f  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_tim.c
+f00d3730972ebc50ced69c9c40bfb2d5e2bbc2026e33818bc97cf2048dc47837  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_tim_ex.c
+24be6acbe1eaad088184086efb3a4ce309e00e90ceeeecbf3e112b8ec23bb429  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_uart.c
+ef3ee8fb9ea24163b9ed0b0e6078bba36b071de3ff9af16a7914df634e0bb191  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_uart_ex.c
+a19ff08c49357fc674446e68ebbd806d3925bfeaed294d845b33db9ee060d1bc  FOC_T.ioc
+552e18f5b8d1bb4c377ba082832399d4a6d7fe2b8883b42c5d278d298032fc4f  MDK-ARM/FOC_T.uvprojx
+9a5b62d6c18f215871f7dd5aad6539d49e749447e6f7ff3a525ce1cf6acccc3c  MDK-ARM/RTE/_FOC_T/RTE_Components.h
+2ffde74ddce81f15079360cf0e74585aaddd1c935a4cbcd4cd792242aefb0c3d  MDK-ARM/RTE/_FOC_T_CommandBench/RTE_Components.h
+8aa7753b0613b1e400425cb3b4fb5a0d3a4c57f487831ac4f54fd39a91b11bf9  MDK-ARM/startup_stm32h750xx.s
+f383e9c853ee3b4d47f54990f61ae507c6d90a5f1b2eb74aa8392042d6efec1f  Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os.h
+405bde449889d672725bd3ad3908bb9f54e823b168bf437c6afe360246ba0947  Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.c
+b1670376fa97bba8d55e144b602970f535aa41e276a2e1b3e87ecd906045caf8  Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.h
+ee814ffa60a09e0d114f7f0b1a2a46dc299f8ce5ce1800e909417e71bfe7af08  Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/freertos_mpool.h
+c4f3afb4bc759c43a2b9e5a6a236acca4b1f7301585f02809ae98bec2b15cc93  Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/freertos_os2.h
+dd390a8f432d7a7ba4ca9ad7a37ef3a549fb1c621a3f8d09f8ee30e48a759627  Middlewares/Third_Party/FreeRTOS/Source/croutine.c
+54f696c16294199f4445d042d907b14da401fbb7f3bc3b2ca71acd5dbb120218  Middlewares/Third_Party/FreeRTOS/Source/event_groups.c
+343ced16833df1aad70972829631136d18727bd687fce6f08264162fc9bf221c  Middlewares/Third_Party/FreeRTOS/Source/include/atomic.h
+ecbc64327844a7f24255314d65c4205d3490e8ace8b5d655c1c9f45725b2d7d6  Middlewares/Third_Party/FreeRTOS/Source/include/croutine.h
+dcfd3ab2633029c04037ef35a854db090995fcf938ca33b51199377c36720d47  Middlewares/Third_Party/FreeRTOS/Source/include/deprecated_definitions.h
+b97b6b2d7aa918e62434083f76dca08ae73c85fedd021ecc91af1f39838324f7  Middlewares/Third_Party/FreeRTOS/Source/include/event_groups.h
+74c201409e1156806627c233a27adb1f4da62d9e40baae99db5c7ddc7e9aae2f  Middlewares/Third_Party/FreeRTOS/Source/include/FreeRTOS.h
+973915ae18a63c6783fe09bf589798cbccf3baee7dfa4b14f8d1525607af3ab6  Middlewares/Third_Party/FreeRTOS/Source/include/list.h
+07c912a59ba6af0b6f619f23cc7b58f445596d5ff7f589e9fc564cebbf2530bf  Middlewares/Third_Party/FreeRTOS/Source/include/message_buffer.h
+94ca481a3cb128b2caf847dc570cc82942ee6ffb06710eff09fb0bcbef173848  Middlewares/Third_Party/FreeRTOS/Source/include/mpu_prototypes.h
+5a02b1083a49d9dadd65ac52cd6f21283f24586c939f68c75ce632f60863fd3f  Middlewares/Third_Party/FreeRTOS/Source/include/mpu_wrappers.h
+e3921faf76c89c5bcf068b41b5b806655a0841b68114f9496a56e3a25a5fd84e  Middlewares/Third_Party/FreeRTOS/Source/include/portable.h
+f646ef12236991a3b34c170c65aa12d2d0c0310b28e324ace620e1957b7c109e  Middlewares/Third_Party/FreeRTOS/Source/include/projdefs.h
+c4372fb6b9cd6fb08121c1ac21153bdf3621f92edf2a8381cc631fcef2964fae  Middlewares/Third_Party/FreeRTOS/Source/include/queue.h
+6d4179c295ec9aadb186744e7618854c5ef10cb9a0f8c27948b343a3f6a129af  Middlewares/Third_Party/FreeRTOS/Source/include/semphr.h
+54ff69e8652c7f1332d1679594d1b2076a1633955d6d46e51b3ab4f99780f6ee  Middlewares/Third_Party/FreeRTOS/Source/include/stack_macros.h
+4fe5345c6e09102910b765e0facc05ac12f42ed75eb627767aee59fa5b0df65f  Middlewares/Third_Party/FreeRTOS/Source/include/StackMacros.h
+13f288307ce0b9182941cecfc261b8281fe0fb0e9156f621c252f96f9de8de07  Middlewares/Third_Party/FreeRTOS/Source/include/stream_buffer.h
+1d75dff80cdc81720b60eeb4cb825370bd05508feed244d2ee1cf263be51ffd9  Middlewares/Third_Party/FreeRTOS/Source/include/task.h
+bd94103aef9d4dbf18db3296b5c55be524d229bae90aecb01e2b9475b8f02f55  Middlewares/Third_Party/FreeRTOS/Source/include/timers.h
+2c7593ec5c67bcdb371d5c3fda60f240e594dd3a7b60f72947f53e8c01971e24  Middlewares/Third_Party/FreeRTOS/Source/list.c
+d91f47f6338a4501835989582ae87fd344b6d92b37b5853fa32fd2fffbfaee59  Middlewares/Third_Party/FreeRTOS/Source/portable/MemMang/heap_4.c
+b2e7d040120b0a03801f159d178923a06c74fc64b783a1e5dba50c18cdece746  Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F/port.c
+f529e4dbf67bf5f08de4bf216cda7669f0e89a3c3facbc49f971d25c9656c61c  Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F/portmacro.h
+4613e2dd8c099ee689ff4fabc1d4979c0c22683a95f3e85283c6ef1b92a32bd8  Middlewares/Third_Party/FreeRTOS/Source/queue.c
+20e1a58018635a746b5193073f09a3736464bc913f4ebfe28c39bbb75b4cac6b  Middlewares/Third_Party/FreeRTOS/Source/stream_buffer.c
+6f540b927668e4c87a064749c03f6ee0ca7370b9dfae7d9d5e96ebd0fdf12b8d  Middlewares/Third_Party/FreeRTOS/Source/tasks.c
+87be4c74af661ade4ad39f420888c655067d11df008e7a66c88658f7131cb7f4  Middlewares/Third_Party/FreeRTOS/Source/timers.c
+
+SHA256 tests/can_link_protocol_host.c 6388796f584a636256d4d7c62be3f994a0a6f87c4afadff339447c12bee2eb88
+SHA256 tests/can_link_service_host.c aef8f768b6dc4083d6041710c4538ea25f51d25206ea6a8f1a9c674ce2c42ace
+SHA256 tests/run-can-host.ps1 49dab1085fa0145ee048f6f6a96b71512bb179148c1b95a19b85f9839a5d53d0
+SHA256 tests/run-can-service-host.ps1 9b0c49103980cb37537286fe3bf469fcd9edd38276c907ffcd647fd4cb4e121f
+SHA256 tests/can_link_stubs/board_config.h c020fba5617647e7153cbacbd2582d9ccbc277a490547eb458a3cf9f60a45193
+SHA256 tests/can_link_stubs/fdcan.h 5b032f362b129f6a5134d76a3f818c52e95bf68ba2547b338a3eaa85d499d7b7
+
+PENDING HARDWARE:
+Download Bench then verify BUILD/STATUS/FAULT byte replies; low-rate status without new timing errors.
+Actual PRIMASK latency, IRQ/task worst-case stack, bus congestion/Bus-Off injection and delivery not proven.
+No actual motor limits confirmed, no power-output or rotation test; no control commands over CAN.
+Append later board evidence here with conditions and image/version identity; do not overwrite this record.
+
+APPEND 2026-11-16 -- USER READ-ONLY QUERY BOARD OBSERVATION
+HEAD remains 350ef94; 008 working-tree implementation not committed.
+User report (verbatim): 没问题我测试了几次发现都是正常没有error的计数增加
+Result: HW PASS LIMITED -- visible STATUS response + finite health observations.
+BUILD/FAULT requests are visible; their response values are not retained in the supplied image.
+The user reports the tests were normal; this is not independent byte verification of those two responses.
+INFO has no supplied hardware observation. No exact runtime or fixed-rate test was confirmed.
+
+Screenshot facts:
+1. Watch: ad2s_sample_gap_count=0, foc_isr_overrun_count=0,
+   app_task_deadline_misses=0, can_link_error_count=0.
+2. RX: standard-looking row ID322h, DLC8, data 52 01 02 02 02 19 01 05, Count105, Cycle Time2378.6.
+   TX rows ID321h DLC8:
+   PING 50 49 4E 47 02 00 00 00; Count494; Manual; 1000ms box NOT checked.
+   STATUS 51 01 02 02 00 00 00 00; Count2; Manual/Wait.
+   FAULT 51 01 03 03 00 00 00 00; Count5; Manual/Wait.
+   BUILD 51 01 04 01 00 00 00 00; Count1; Manual/Wait.
+
+STATUS interpretation: v1/opcode02/token02; value0x05011902.
+State02=IDLE; flags19=core config valid (synthetic Bench), Bench, compiled power-disabled.
+Last-published command permit=0; software output_enabled=0.
+Inhibits0501=PWM_NOT_PREPARED(0001)+POWER_DISABLED(0100)+NO_COMMAND(0400).
+These are expected Bench idle inhibits, not a fault code or a measured driver voltage.
+STATUS is a diagnostic observation; it does not independently establish the complete fault mask.
+
+Evidence limits:
+- Manual query screenshot does not prove 1Hz continuous operation or exactly 30 seconds.
+- All replies share ID322. Counts include prior/different queries; no packet-loss calculation.
+- Displayed2378.6ms is a receive interval display, not measured application response latency.
+- The test followed the prior Bench-only, power-bus-disconnected procedure; images do not independently verify supply wiring.
+- No board image hash readback. GET_BUILD is a manual revision marker, not an image checksum.
+- No worst PRIMASK/IRQ/task stack, congestion/error-injection/Bus-Off recovery, physical EN/PWM or motor test.
+
+Local version recheck: all187 firmware input fingerprints match the recorded008 manifest.
+Bench AXF/HEX also match the preceding build record; no firmware rebuild required for this documentation-only closeout.
+User's MDK-ARM/FOC_T.uvoptx working-tree change was preserved and not edited by the agent.
+SHA256 MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.axf 950a63e1ddf77687eb5278a471048b387d602e2426c6a85284e53cb2a7b9e40d
+SHA256 MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.hex cbe668434df91ed53400963f7340f0ec3af7416b7d85664d1a46715fb24f330e
+Source image: C:\Users\LEGION\AppData\Local\Temp\codex-clipboard-2deba834-340a-4338-9bb3-e4823c13ccc5.png
+SHA256 docs/validation/008-can-query-20261116-health.png d27f950651f4855f5f9bfedff00927aea8f8c324f6194fab33b9d86059c057ed
+Source image: C:\Users\LEGION\AppData\Local\Temp\codex-clipboard-45317bb8-ec86-44dd-afc2-e6b6457c5b34.png
+SHA256 docs/validation/008-can-query-20261116-status.png c68b0dee62a49f727b4e26f92574c53035af2bacaa0c00f9a5626f14965e1461
+
+Closeout: read-only query limited hardware checkpoint ready for user review/commit.
+Next: define and integrate CAN STOP/control transaction while maintaining disabled-output test profile.
+All earlier NOT_RUN statements above are historical; this append only supersedes the limited scope listed here.

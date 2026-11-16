@@ -124,6 +124,28 @@ static void RecordCriticalCycles(uint32_t started)
     }
 }
 
+#if AXIS_COMMAND_BENCH_ENABLE
+/* appTask reads diagnostic mirrors only, on STATUS/FAULT queries.
+ * PRIMASK excludes TIM1 IRQ0 while copying. Mirrors can reflect different
+ * publication times (e.g. fault before next permit update); never authorize
+ * control from this snapshot. Fatal/NMI paths disable outputs and do not return. */
+static void ReadCanStatus(CanLinkReadStatus *snapshot)
+{
+    uint32_t saved = __get_PRIMASK();
+    uint32_t started;
+    __disable_irq();
+    started = DWT->CYCCNT;
+    snapshot->status_word = axis_status_word;
+    snapshot->fault_mask = board_fault_mask;
+    snapshot->configured = axis_command_configured;
+    snapshot->permit = axis_command_permit;
+    snapshot->output_enabled = board_output_enabled;
+    __DMB();
+    RecordCriticalCycles(started);
+    __set_PRIMASK(saved);
+}
+#endif
+
 #if (BOARD_POWER_STAGE_MODE != BOARD_POWER_STAGE_DISABLED)
 static void PreparePowerPWM(void)
 {
@@ -246,7 +268,7 @@ void AppRuntime_TaskStart(void)
     app_heap_free_bytes = (uint32_t)xPortGetFreeHeapSize();
     app_heap_min_free_bytes = (uint32_t)xPortGetMinimumEverFreeHeapSize();
 #if AXIS_COMMAND_BENCH_ENABLE
-    CanLink_Init(); /* startup only, before periodic acquisition begins */
+    CanLink_Init(ReadCanStatus); /* startup only; read-only provider, no control API */
 #endif
     CurrentSense_Start();
 #if AXIS_COMMAND_BENCH_ENABLE

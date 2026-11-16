@@ -24,3 +24,40 @@ int CanLinkProtocol_MakeReply(const CanLinkFrame *request, CanLinkFrame *reply)
     *reply = result;
     return 1;
 }
+
+uint8_t CanLinkProtocol_QueryOpcode(const CanLinkFrame *request)
+{
+    unsigned int i;
+    if (request == NULL) return 0U;
+    if ((request->id != CAN_LINK_REQUEST_ID) ||
+        (request->extended != 0U) || (request->remote != 0U) ||
+        (request->fd != 0U) || (request->brs != 0U) ||
+        (request->length != 8U)) return 0U;
+    if ((request->data[0] != 0x51U) || (request->data[1] != 0x01U) ||
+        (request->data[2] < CAN_QUERY_INFO) ||
+        (request->data[2] > CAN_QUERY_BUILD)) return 0U;
+    for (i = 4U; i < 8U; ++i)
+        if (request->data[i] != 0U) return 0U;
+    return request->data[2];
+}
+
+int CanLinkProtocol_MakeQueryReply(const CanLinkFrame *request,
+                                  uint32_t value, CanLinkFrame *reply)
+{
+    CanLinkFrame result = {0U, 0U, 0U, 0U, 0U, 0U, {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U}};
+    uint8_t opcode;
+    unsigned int i;
+    if (reply == NULL) return 0;
+    opcode = CanLinkProtocol_QueryOpcode(request);
+    if (opcode == 0U) return 0;
+    result.id = CAN_LINK_REPLY_ID;
+    result.length = 8U;
+    result.data[0] = 0x52U;
+    result.data[1] = 0x01U;
+    result.data[2] = opcode;
+    result.data[3] = request->data[3];
+    for (i = 0U; i < 4U; ++i)
+        result.data[4U + i] = (uint8_t)(value >> (i * 8U));
+    *reply = result;
+    return 1;
+}

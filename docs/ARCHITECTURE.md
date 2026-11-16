@@ -2,11 +2,32 @@
 
 本页只维护**已经实现的当前架构**；拟议机制留在 spec。入口见 [docs/README.md](README.md)，移植路线见 [003 第7节](specs/003-c-port-architecture.md#7-移植表与顺序)。目标是参考 ODrive 的组织与算法，用 C 实现，不接入其 C++ 对象体系。
 
-版本锚点：2026-11-16，`Xiao_ODrive`，006已提交`7fe5309`＋007工作区增量。007加入Bench CAN轮询PING/PONG，SRC/HOST/BUILD通过；用户500 kbit/s、1 Hz的01/02回显与四项异常计数全0截图支持HW有限通过，详情与证据边界见[007第7节](specs/007-can-link-bringup.md)。006旧有限禁输出截图留在[006记录](validation/006-axis-run-phase-20261110.txt)，不自动支持本轮CAN/VOS1新固件。
+版本锚点：2026-11-16，`Xiao_ODrive`，固件基线`350ef94`（007已提交）＋008只读查询工作区增量；008 SRC/HOST/两目标增量BUILD通过，STATUS正确回包与四项计数0支持HW有限通过（BUILD/FAULT回包未留图），见[008](specs/008-can-command-protocol.md)。007加入Bench CAN轮询PING/PONG，SRC/HOST/BUILD通过；用户500 kbit/s、1 Hz的01/02回显与四项异常计数全0截图支持HW有限通过，详情与证据边界见[007第7节](specs/007-can-link-bringup.md)。006旧有限禁输出截图留在[006记录](validation/006-axis-run-phase-20261110.txt)，不自动支持本轮CAN/VOS1新固件。
 
 本工程有两个构建目标：`FOC_T`正常配置（未确认范围，拒绝START/UPDATE）；`FOC_T_CommandBench`以编译宏强制禁功率输出，合成命令只进入同一交接核心，FOC始终停机。测试目标有一次自动生产者，正常目标没有。当前验收与板测证据入口见[007](specs/007-can-link-bringup.md)，命令机制及旧演练见[005](specs/005-command-handoff.md)。
 
 003旧AXF差异原因仍未知；原发现及当时重建保留在[原记录](validation/003-architecture-build.txt)。当前验收层级逐项查[007](specs/007-can-link-bringup.md)。
+
+## 源码分类导航
+
+这是现有文件的职责分类，**不是新建目录或移动文件**。手写代码目前仍在Core/Src与Core/Inc；Keil两个目标仍使用Application/User/Core等既有工程组。main/freertos与外设文件带CubeMX生成骨架，用户逻辑入口和生成代码边界仍须保留。
+
+同名.c/.h作为一个模块看待：.c是实现，.h是对外接口；只在本模块内使用的辅助函数留在.c，不再单独拆头文件。
+
+| 分类 | 现有文件入口（同名.h在Core/Inc） | 以后什么改动放这里 |
+| --- | --- | --- |
+| 启动与调度 | [main.c](../Core/Src/main.c)、[freertos.c](../Core/Src/freertos.c)、[app_runtime.c](../Core/Src/app_runtime.c)、[app_policy.h](../Core/Inc/app_policy.h)、[FreeRTOSConfig.h](../Core/Inc/FreeRTOSConfig.h) | 启动、任务节拍、实时/后台调用、运行门禁组合 |
+| 控制命令、状态与算法 | [axis_command.c](../Core/Src/axis_command.c)、[axis_command_core.c](../Core/Src/axis_command_core.c)、[axis_status.c](../Core/Src/axis_status.c)、[open_foc.c](../Core/Src/open_foc.c) | 命令交接/同步、纯C许可规则、状态观察、FOC计算；状态观察不授予许可 |
+| 采样与反馈 | [ad2s1210.c](../Core/Src/ad2s1210.c)、[current_sense.c](../Core/Src/current_sense.c)、[current_monitor.c](../Core/Src/current_monitor.c) | 旋变读取、电流/母线读取与换算、反馈有效性 |
+| 板级配置与安全 | [board_config.h](../Core/Inc/board_config.h)、[board_safety.c](../Core/Src/board_safety.c) | 功率模式、EN/MOE管理、锁存故障与关断 |
+| 通信与报文 | [can_link.c](../Core/Src/can_link.c)、[can_link_protocol.c](../Core/Src/can_link_protocol.c)、[telemetry_format.c](../Core/Src/telemetry_format.c) | CAN有界收发、字节编解码、串口遥测格式化；新增查询优先扩展现有文件 |
+| 外设与芯片支持 | [adc.c](../Core/Src/adc.c)、[tim.c](../Core/Src/tim.c)、[spi.c](../Core/Src/spi.c)、[usart.c](../Core/Src/usart.c)、[fdcan.c](../Core/Src/fdcan.c)、[gpio.c](../Core/Src/gpio.c)、Core中stm32h7xx/system_stm32h7xx文件 | CubeMX生成配置、中断入口、HAL时基与芯片初始化；不混入协议/控制业务 |
+| 验证代码 | [axis_command_bench.c](../Core/Src/axis_command_bench.c)；[tests](../tests)下的主机测试、桩与运行脚本 | Bench演练与HOST回归；tests不参与板端固件链接 |
+| 底层库 | [Drivers](../Drivers)、[Middlewares](../Middlewares) | HAL/CMSIS/FreeRTOS等外部库；不把应用新功能塞进库文件 |
+
+CAN保留两个职责清楚的模块：can_link处理硬件收发与限量服务，can_link_protocol处理字节格式，后者可直接在电脑测试。新增一条查询不对应新增一套.c/.h。axis_command_core与axis_command同理，前者管纯规则，后者管任务/ISR交接。
+
+本轮008没有新增C源或头文件：修改5个已有固件文件、4个已有测试文件；新增4项仅为008 spec、验证记录和两张原始截图。后续同一功能继续更新这些入口。文件归类不改变运行职责，具体调用/时序仍以下文为准。
 
 ## 启动与执行上下文
 
@@ -24,26 +45,30 @@ flowchart LR
     T -->|update IRQ| I[TIM1 FastISR 约 20 kHz]
     ADC -->|JDR + JEOS| I
     S -->|有界复制 / 年龄检查| I
-    A -->|局部校验 + PRIMASK固定发布| Q[32 B单槽命令 / 独立STOP票据]
+    A -->|仅Bench自动演练 / PRIMASK固定发布| Q[32 B单槽命令 / 独立STOP票据]
     Q -->|TIM1边界消费| BND[命令核心 / epoch / 有效期]
     I --> BND
-    BND --> C[FOC / CCR1-3]
+    BND -->|普通目标有效许可时安装命令| C[FOC / CCR1-3]
+    BND -->|Bench强制空命令| OFF[FOC停机 / 禁功率输出]
     I --> B[board_safety 最终许可]
     F[异常 / 故障入口] -->|先撤输出| B
     I -->|两列遥测副本| A
     A -->|TX_IT| U[USART1 IRQ]
-    A -->|仅Bench 采样后每轮最多1帧| CAN[CAN PING/PONG服务]
+    A -->|仅Bench 采样后每轮最多1帧| CAN[CAN PING/PONG与只读查询]
     CAN <-->|FDCAN1 专用Message RAM 无IRQ/DMA| PC[USB-CAN电脑]
+    I -->|诊断镜像| OBS[状态 / 许可 / 输出观察]
+    F -->|故障锁存| OBS
+    OBS -->|查询时短PRIMASK复制| CAN
 ```
 
 命令箭头在测试目标由AxisCommandBench_Step实际驱动；正常目标仍无请求生产者/真实RX，范围未确认，拒绝START/UPDATE。测试目标只演练交接，BND→FOC路径被替换为ApplyCommand(NULL)。图中的 `board_safety` 是共享安全入口，不是独立任务；HAL 启动也会写 MOE/CEN，见下方完整写者表。
 
 1. [启动文件](../MDK-ARM/startup_stm32h750xx.s) `Reset_Handler:237`：`ExitRun0Mode → SystemInit → __main`，C 运行库初始化静态对象后进入 `main`。
-2. [main.c](../Core/Src/main.c) `main:73`：`MPU_Config → HAL_Init → BoardSafety_InitSafe → SystemClock_Config/PeriphCommonClock_Config`。首次软件撤输出在 HAL 初始化之后，不能证明复位到此时的引脚电平。
-3. 同一 `main:103–111`：初始化 GPIO、TIM1、ADC1/2/3、SPI1、USART1，再调用 [app_runtime.c](../Core/Src/app_runtime.c) `AppRuntime_Init`，恢复功率 GPIO 低、校准 ADC、初始化监测/旋变/FOC和命令核心；初始化失败进入 Fatal。
-4. `main:115–125` 调用 `osKernelInitialize → MX_FREERTOS_Init → osKernelStart`；[freertos.c](../Core/Src/freertos.c) `MX_FREERTOS_Init:94` 只建一个业务任务 `appTask`，检查创建结果。内核返回走 Fatal，不回裸机循环。
-5. 普通目标的 `StartAppTask:143 → AppRuntime_TaskStart:174`：启动三组 ADC、启动 CH4、再次撤 MOE，最后启动 TIM1 update IRQ。`CurrentMonitor_Run_20kHz` 消费 2000 帧等待加 4096 帧零偏标定后，appTask 才准备六路 PWM/AF 引脚。
-5a. 测试目标：MX_TIM1_Init在USER区域跳过能配置AF的post-init调用，保持六路GPIO低；TaskStart直接只置CC4E，再Base_Start_IT，避免HAL启动CH4置MOE；不执行PreparePowerPWM。普通目标保留既有HAL路径。
+2. [main.c](../Core/Src/main.c) `main:74`：`MPU_Config → HAL_Init → BoardSafety_InitSafe → SystemClock_Config/PeriphCommonClock_Config`。首次软件撤输出在 HAL 初始化之后，不能证明复位到此时的引脚电平。
+3. 同一 `main:104–113`：初始化 GPIO、TIM1、ADC1/2/3、SPI1、USART1、FDCAN1，再调用 [app_runtime.c](../Core/Src/app_runtime.c) `AppRuntime_Init:215`，恢复功率 GPIO 低、校准 ADC、初始化监测/旋变/FOC和命令核心；初始化失败进入 Fatal。
+4. `main:117–121` 调用 `osKernelInitialize → MX_FREERTOS_Init → osKernelStart`；[freertos.c](../Core/Src/freertos.c) `MX_FREERTOS_Init:139` 只建一个业务任务 `appTask`，检查创建结果。内核返回走 Fatal，不回裸机循环。
+5. 普通目标的 `StartAppTask:188 → AppRuntime_TaskStart:237`：启动三组 ADC、启动 CH4、再次撤 MOE，最后启动 TIM1 update IRQ。`CurrentMonitor_Run_20kHz` 消费 2000 帧等待加 4096 帧零偏标定后，appTask 才准备六路 PWM/AF 引脚。
+5a. 测试目标：MX_TIM1_Init在USER区域跳过能配置AF的post-init调用，保持六路GPIO低；TaskStart在周期采集前调用CanLink_Init并初始化自动命令演练，然后直接只置CC4E，再Base_Start_IT，避免HAL启动CH4置MOE；不执行PreparePowerPWM。普通目标保留既有HAL路径。
 6. `AppRuntime_FastISR` 取得反馈有效性后、任何慢环/FOC计算前，经 `AxisCommandPort_BeginCycle` 接收整组命令。最终短临界区调用 `AxisCommandPort_FinalPermit`，复核许可/期限/故障和原PWM准备/标定/反馈条件，才调用 `BoardSafety_SetOutputsEnabled`。旧 `foc_run_request` 是镜像；普通目标配置未确认，因此没有运行许可；测试目标的命令许可不等于功率许可。STOP是撤EN/MOE，不是受控减速。
 
 ## 模块分工与实时链
@@ -60,7 +85,7 @@ flowchart LR
 | 安全 / 只读状态 | board_safety 撤输出、锁存；axis_status 只汇报，不拥有启动权或完整 Axis 生命周期 | [board_safety.c](../Core/Src/board_safety.c) `BoardSafety_LatchFault:88`；[axis_status.c](../Core/Src/axis_status.c) `AxisStatus_Publish:5/LatchFault:12` |
 | 遥测 / 堆监测 | appTask约5 ms尝试有界整数转换的两列速度CSV，USART1 IRQ搬运；约1000 ms查询堆；实时有效性检查仍在TIM1 | `app_runtime.c SendTelemetry/BackgroundStep/FastISR`；`telemetry_format.c TelemetryFormat_SpeedCsv` |
 | 栈水位诊断 | 已有Idle任务约1000 ms扫描appTask栈，业务任务和IRQ可抢占；不等待/分配/关调度 | `freertos.c vApplicationIdleHook`；本地`tasks.c uxTaskGetStackHighWaterMark/prvTaskCheckFreeStackSpace` |
-| CAN链路测试 | 仅Bench在appTask轮询FDCAN1，每轮最多1收/1次回包入队；纯C PING/PONG，不发布电机命令 | `can_link.c CanLink_Init/Poll`；`can_link_protocol.c CanLinkProtocol_MakeReply` |
+| CAN只读服务 | 仅Bench在appTask轮询，每轮最多1收/1次回包入队；PING/PONG和INFO/STATUS/FAULT/BUILD，不发布电机命令 | `can_link.c CanLink_Init/Poll/QueryValue`；`can_link_protocol.c`；`app_runtime.c ReadCanStatus` |
 | 不存在的业务模块 | 无电机通信命令解析、独立通信/状态/日志任务或持久化日志；USART TX_RX 配置不代表已有 RX 业务 | [usart.c](../Core/Src/usart.c) `MX_USART1_UART_Init:31`；`freertos.c MX_FREERTOS_Init` 的队列/互斥锁等业务区为空 |
 
 FreeRTOS 自带 Idle 和 Timer 服务任务不是额外业务任务，依据 `tasks.c vTaskStartScheduler`、`timers.c xTimerCreateTimerTask`。目前不因功能名称增加线程。
@@ -81,7 +106,8 @@ FreeRTOS 自带 Idle 和 Timer 服务任务不是额外业务任务，依据 `ta
 | 旋变角 rad、速度 rpm、双时戳、序号及有效性 | appTask → TIM1/任务；最新固定 32 B 静态快照，读者持有副本 | 发布/读取均保存 PRIMASK、屏蔽中断、固定复制、DMB、恢复；失败也递增尝试序号并发布无效帧；不在临界区做 SPI | `ad2s1210.h AD2S1210_FeedbackSnapshot`；`ad2s1210.c PublishSnapshot:109/GetSnapshot:139/Run_1kHz:811` |
 | ADC 电流 / 母线原始码及换算值 A/V | ADC 硬件 JDR → TIM1；寄存器会被后续转换覆盖 | JEOS 检查后顺序读四个 JDR；无源触发帧号/采样时戳，软件消费计数不保证硬件同帧；运行中缺帧撤输出锁存 | `current_sense.c:49/64`；`current_monitor.c:98`；`app_runtime.c:297–308` |
 | 积分器、dq 给定、占空比 | main 给初值，运行期间 TIM1 控制代码独占 | 同一执行上下文；后台尚无正式修改接口；板级故障独立覆盖输出 | `open_foc.c OpenFOC_Init/Ramp_1ms/Run_20kHz/FOC_WriteDuty` |
-| CAN PING/PONG | FDCAN硬件RX→appTask栈完整副本→HAL复制TX RAM；专用RAM共644 B，独占FDCAN1 | BLOCKING单消费者，DLC先检查再HAL复制；不共享给TIM1，无DMA/cache维护；Bus-Off锁停服务，不修改控制许可 | `can_link.c CanLink_Init/Poll/PollErrors`；[007](specs/007-can-link-bringup.md) |
+| CAN PING/只读查询 | FDCAN RX→appTask栈副本→HAL复制TX RAM；644 B专用RAM，独占FDCAN1 | BLOCKING单消费者，DLC先检查再HAL复制；无DMA/cache维护；Bus-Off锁停服务，不改控制许可 | `can_link.c CanLink_Init/Poll/PollErrors`；[008](specs/008-can-command-protocol.md) |
+| CAN诊断副本 | TIM1/故障入口的5个镜像→appTask局部20 B→单帧结果 | 仅合法STATUS/FAULT触发ReadCanStatus；保存/恢复PRIMASK，固定读取，区外编码；不保证同拍或当前许可，多个请求各自采样 | `app_runtime.c ReadCanStatus`；`can_link.h CanLinkReadStatus`；[008第6节](specs/008-can-command-protocol.md) |
 | 两列速度遥测 | TIM1 → appTask局部副本 → USART1 IRQ；静态发送缓冲96 B | 短PRIMASK复制两列，区外有界格式化；UART忙则丢帧、不覆盖在发缓冲；无DMA | `app_runtime.c SendTelemetry/FastISR`；`telemetry_format.c TelemetryFormat_SpeedCsv` |
 | app_stack_min_free_bytes / probe_count / last_tick_ms | Idle Hook唯一写入 → 调试观察；32位静态标量，appTask不消费 | 显式稳定appTaskHandle；words转bytes，保留历史最小值，完成后计时；UINT32_MAX/count=0为未测。三项不是原子快照，不进入控制许可 | `freertos.c vApplicationIdleHook`；`app_runtime.c`定义与`app_runtime.h`说明 |
 | axis_status_word / 板级故障 | TIM1正常发布、故障入口置位 → 调试读取；32位观察量 | TIM1用私有阶段Getter判断对齐，仍在最终输出后发布并保留FAULT；观察不授予许可，与其它Watch非原子帧 | `AppRuntime_FastISR`；`AxisStatus_Publish/LatchFault`；`BoardSafety_LatchFault` |
@@ -100,7 +126,7 @@ FOC阶段接口`OpenFOC_GetRunPhase`仅在初始化/TIM1同一所有者上下文
 - 2 ms 是当前软件新鲜度门槛，**不是任何转速下的角误差保证**。三个 ADC rank1 与 ADC3 rank2 也非同一瞬间；当前缺少 ADC 物理时戳/源帧号，没有把角度外推到电流采样或 PWM 生效时刻。
 - 模式 2 的 Park 使用此前命令角，随后 FOC 推进角度；对齐阶段反馈坐标与固定输出角也不同。当前不能声称已完成 `theta_i/theta_pwm` 对时或补偿，详见 [003 第5节](specs/003-c-port-architecture.md#5-共享数据审查快照与时序方案2026-11-06)。
 
-已实现机制和相对003的取舍见[005](specs/005-command-handoff.md)。普通目标运行配置为静态未确认值，拒绝START/UPDATE；测试目标只用合成范围演练交接。缺配置不阻挡STOP。没有实际通信/session，不能声称跨复位防重放。正常目标仍可能剔除未使用入口；测试目标实际链接并执行Submit/Stop/GetSnapshot。真实通信请求源接入后仍需重测。普通RTOS BASEPRI不能屏蔽TIM1 IRQ0，任务发布保存/恢复PRIMASK；NMI/Fatal先关输出、不触碰邮箱且不返回。主机顺序行为测试不证明目标原子性时长；关中断和最坏IRQ耗时须板测。
+已实现机制和相对003的取舍见[005](specs/005-command-handoff.md)。普通目标运行配置为静态未确认值，拒绝START/UPDATE；测试目标只用合成范围演练交接。缺配置不阻挡STOP。没有实际控制通信/session（CAN目前只读），不能声称跨复位防重放。正常目标仍可能剔除未使用入口；测试目标实际链接并执行Submit/Stop/GetSnapshot。真实通信请求源接入后仍需重测。普通RTOS BASEPRI不能屏蔽TIM1 IRQ0，任务发布保存/恢复PRIMASK；NMI/Fatal先关输出、不触碰邮箱且不返回。主机顺序行为测试不证明目标原子性时长；关中断和最坏IRQ耗时须板测。
 
 
 ## PWM、驱动使能与故障写者
@@ -161,7 +187,7 @@ FOC阶段接口`OpenFOC_GetRunPhase`仅在初始化/TIM1同一所有者上下文
 | RTOS heap / appTask | `ucHeap`仍为16384 B，实际地址见本轮005 map记录；appTask 4096 B 栈运行时从此堆分配，不能再计一次静态 RAM |
 | 中断栈 / 内核任务 | MSP仍4096 B，实际地址见本轮005 map记录；Idle/Timer 静态栈 512/1024 B、TCB 各 92 B；启动 C 库堆配置 512 B 但已被链接剔除 |
 
-项目依据 [FOC_T.uvprojx](../MDK-ARM/FOC_T.uvprojx) `uAC6=0/useUlib/uC99/uGnu`；scatter 由 uVision 生成（`useFile=0`），实际 `.lnp` 引用 `MDK-ARM/FOC_T/FOC_T.sct`。当前完整版本指纹与map资源见[007构建记录](validation/007-can-link-20261112.txt)，005原map摘录留作历史；可复现全量/增量及独立策略检查命令见 [003 第4节](specs/003-c-port-architecture.md#4-构建语言标准与内存审查快照2026-11-06)。静态容量足够不等于最坏运行栈已经安全。
+项目依据 [FOC_T.uvprojx](../MDK-ARM/FOC_T.uvprojx) `uAC6=0/useUlib/uC99/uGnu`；scatter 由 uVision 生成（`useFile=0`），实际 `.lnp` 引用 `MDK-ARM/FOC_T/FOC_T.sct`。当前完整版本指纹与map资源见[008构建记录](validation/008-can-query-20261116.txt)，005原map摘录留作历史；可复现全量/增量及独立策略检查命令见 [003 第4节](specs/003-c-port-architecture.md#4-构建语言标准与内存审查快照2026-11-06)。静态容量足够不等于最坏运行栈已经安全。
 
 ## DMA 与 cache：当前现状
 
@@ -174,6 +200,6 @@ FOC阶段接口`OpenFOC_GetRunPhase`仅在初始化/TIM1同一所有者上下文
 
 ## 尚未闭合的边界
 
-整组命令交接和两项时序修复已提交为1d3f101，005有有限截图支持；006只读FOC阶段接口及待机镜像已实现/编译/HOST通过，四项禁输出待机/演练观察已通过（用户截图，不含运行时长和板端版本回读）；007真实CAN RX/PING/PONG已在用户低速台架得到01/02回显及四项异常计数全0的有限证据，尚无板端版本回读、精确丢包统计、满负载或错误注入验收；电机通信命令、完整Axis生命周期、ADC/角度/PWM对时尚缺实现；最高机械转速、实际电机/旋变极对数、允许电角误差尚未确认。当前输出准备毛刺、故障关断延迟、Break 硬件路径、最坏 ISR/临界区/MSP/任务栈，以及带输出闭环均须独立验收。
+整组命令交接和两项时序修复已提交为1d3f101，005有有限截图支持；006只读FOC阶段接口及待机镜像已实现/编译/HOST通过，四项禁输出待机/演练观察已通过（用户截图，不含运行时长和板端版本回读）；007真实CAN RX/PING/PONG已在用户低速台架得到01/02回显及四项异常计数全0的有限证据，尚无板端版本回读、精确丢包统计、满负载或错误注入验收；008已新增四个只读查询及20 B诊断复制，源码/HOST/BUILD通过，用户STATUS与四项计数已支持有限硬件观察，非固定周期/满负载验收；电机通信命令、完整Axis生命周期、ADC/角度/PWM对时尚缺实现；最高机械转速、实际电机/旋变极对数、允许电角误差尚未确认。当前输出准备毛刺、故障关断延迟、Break 硬件路径、最坏 ISR/临界区/MSP/任务栈，以及带输出闭环均须独立验收。
 
 继续工作以 [当前入口](README.md)、对应 spec 和版本化 validation 为准。新增方案先写 spec；实现并验证后才更新本页的“当前事实”，旧截图和旧构建记录原位保留。

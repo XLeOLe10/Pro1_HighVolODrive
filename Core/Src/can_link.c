@@ -12,9 +12,11 @@
                         FDCAN_IR_RF0W | FDCAN_IR_TC | FDCAN_IR_TCF | FDCAN_IR_TFE)
 
 volatile uint32_t can_link_rx_count;
+volatile uint32_t can_query_rx_count;
 volatile uint32_t can_link_error_count;
 volatile CanLinkDiagnostics can_link_diag;
 static uint8_t init_attempted;
+static CanLinkStatusReader status_reader;
 
 static void LinkError(uint32_t flags)
 {
@@ -22,11 +24,18 @@ static void LinkError(uint32_t flags)
     can_link_diag.error_flags |= flags;
 }
 
-void CanLink_Init(void)
+void CanLink_Init(CanLinkStatusReader read_status)
 {
     FDCAN_FilterTypeDef filter = {0};
     if (init_attempted != 0U) return;
     init_attempted = 1U;
+    if (read_status == 0)
+    {
+        LinkError(CAN_LINK_ERROR_CONFIG);
+        can_link_diag.state = 2U;
+        return;
+    }
+    status_reader = read_status;
     /* Check generated geometry before directly peeking the FIFO header below.
      * This service assumes sole FDCAN1 use and an 8-byte blocking FIFO. */
     if ((hfdcan1.Instance != FDCAN1) ||
@@ -111,6 +120,25 @@ static void PollErrors(void)
     }
 }
 
+static uint32_t QueryValue(uint8_t opcode)
+{
+    CanLinkReadStatus snapshot;
+    uint32_t flags;
+    if (opcode == CAN_QUERY_INFO) return CAN_QUERY_INFO_VALUE;
+    if (opcode == CAN_QUERY_BUILD) return CAN_QUERY_BUILD_REVISION;
+    status_reader(&snapshot);
+    if (opcode == CAN_QUERY_FAULT) return snapshot.fault_mask;
+    flags = (snapshot.configured != 0U ? 1U : 0U) |
+            (snapshot.permit != 0U ? 2U : 0U) |
+            (snapshot.output_enabled != 0U ? 4U : 0U) |
+            (AXIS_COMMAND_BENCH_ENABLE != 0 ? 8U : 0U) |
+            (BOARD_POWER_STAGE_MODE == BOARD_POWER_STAGE_DISABLED ? 16U : 0U);
+    /* axis_status's low byte is state; upper bits are inhibit observations.
+     * A fault can precede the next permit mirror update. No control authority. */
+    return (snapshot.status_word & 0xFFU) | (flags << 8U) |
+           (((snapshot.status_word >> 8U) & 0xFFFFU) << 16U);
+}
+
 void CanLink_Poll(void)
 {
     FDCAN_RxHeaderTypeDef rx;
@@ -118,6 +146,7 @@ void CanLink_Poll(void)
     CanLinkFrame request;
     CanLinkFrame reply;
     uint32_t index;
+    uint8_t opcode;
     volatile const uint32_t *element;
     if (can_link_diag.state != 1U) return;
     PollErrors();
@@ -154,12 +183,23 @@ void CanLink_Poll(void)
     request.fd = (uint8_t)(rx.FDFormat != FDCAN_CLASSIC_CAN);
     request.brs = (uint8_t)(rx.BitRateSwitch != FDCAN_BRS_OFF);
     request.length = (uint8_t)((rx.DataLength == FDCAN_DLC_BYTES_8) ? 8U : 0U);
-    if (CanLinkProtocol_MakeReply(&request, &reply) == 0)
+    if (CanLinkProtocol_MakeReply(&request, &reply) != 0)
     {
-        can_link_diag.rejected_count++;
-        return;
+        can_link_rx_count++;
     }
-    can_link_rx_count++;
+    else
+    {
+        opcode = CanLinkProtocol_QueryOpcode(&request);
+        if (opcode == 0U)
+        {
+            can_link_diag.rejected_count++;
+            return;
+        }
+        /* request is a stable private copy; formatting cannot fail after the
+         * same validation. No command submission, watchdog feed or fault clear. */
+        (void)CanLinkProtocol_MakeQueryReply(&request, QueryValue(opcode), &reply);
+        can_query_rx_count++;
+    }
     if (HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan1) == 0U)
     {
         can_link_diag.tx_busy_count++;

@@ -25,6 +25,20 @@ static FDCAN_RxHeaderTypeDef incoming;
 static uint8_t incoming_data[8];
 static FDCAN_TxHeaderTypeDef sent_header;
 static uint8_t sent_data[8];
+static unsigned status_reads, ignored_status_reads;
+static CanLinkReadStatus observed_status;
+static void ReadStatus(CanLinkReadStatus *out)
+{
+    CHECK(out != NULL);
+    ++status_reads;
+    *out = observed_status;
+}
+static void IgnoredStatus(CanLinkReadStatus *out)
+{
+    (void)out;
+    ++ignored_status_reads;
+}
+
 
 void HostClearFlag(FDCAN_HandleTypeDef *h, uint32_t mask)
 {
@@ -125,10 +139,10 @@ static void Setup(void)
 }
 static void Ready(void)
 {
-    CanLink_Init();
+    CanLink_Init(ReadStatus);
     CHECK(can_link_diag.state == 1U && can_link_error_count == 0U);
     CHECK(config_calls == 1U && global_calls == 1U && blocking_calls == 1U && start_calls == 1U);
-    CanLink_Init();
+    CanLink_Init(IgnoredStatus);
     CHECK(config_calls == 1U && start_calls == 1U);
 }
 static void Queue(uint32_t dlc, uint32_t index, uint32_t count)
@@ -159,6 +173,7 @@ static void Valid(void)
     CanLink_Poll();
     CHECK(receive_calls == 1U && send_calls == 1U); /* no periodic duplicate */
     CHECK(free_calls == 1U);
+    CHECK(status_reads == 0U && ignored_status_reads == 0U && can_query_rx_count == 0U);
 }
 static void Lengths(void)
 {
@@ -253,7 +268,7 @@ static void Latched(int busoff, int register_only)
     CHECK(can_link_diag.error_flags == (busoff ? CAN_LINK_ERROR_BUS_OFF : CAN_LINK_ERROR_RAM));
     CHECK(can_link_error_count == 1U && receive_calls == 0U && send_calls == 0U);
     host_can_registers.PSR = 0U; host_can_registers.IR = 0U;
-    CanLink_Init(); CanLink_Poll();
+    CanLink_Init(ReadStatus); CanLink_Poll();
     CHECK(can_link_diag.state == (busoff ? 3U : 2U));
     CHECK(start_calls == 1U && receive_calls == 0U && send_calls == 0U);
 }
@@ -277,24 +292,182 @@ static void BadConfig(unsigned field)
     case 5: host_can_registers.ILE = 1U; break;
     default: hfdcan1.Instance = NULL; break;
     }
-    CanLink_Init();
+    CanLink_Init(ReadStatus);
     CHECK(can_link_diag.state == 2U && can_link_diag.error_flags == CAN_LINK_ERROR_CONFIG);
     CHECK(can_link_error_count == 1U && config_calls == 0U && start_calls == 0U);
-    CanLink_Init(); CanLink_Poll();
+    CanLink_Init(ReadStatus); CanLink_Poll();
     CHECK(can_link_error_count == 1U && receive_calls == 0U && start_calls == 0U);
 }
 static void InitFailure(unsigned step)
 {
     fail_init_at = step;
-    CanLink_Init();
+    CanLink_Init(ReadStatus);
     CHECK(can_link_diag.state == 2U && can_link_diag.error_flags == CAN_LINK_ERROR_INIT);
     CHECK(can_link_error_count == 1U);
     CHECK(config_calls == 1U && global_calls == (step >= 2U));
     CHECK(blocking_calls == (step >= 3U) && start_calls == (step >= 4U));
     fail_init_at = 0U;
-    CanLink_Init(); CanLink_Poll();
+    CanLink_Init(ReadStatus); CanLink_Poll();
     CHECK(config_calls == 1U && receive_calls == 0U && can_link_diag.state == 2U);
 }
+
+static void QueueQuery(uint8_t opcode, uint8_t token)
+{
+    static const uint8_t query[8]={0x51U,0x01U,0U,0U,0U,0U,0U,0U};
+    Queue(8U,0U,1U);
+    memcpy(incoming_data,query,sizeof(query));
+    incoming_data[2]=opcode;
+    incoming_data[3]=token;
+}
+static void QueryValid(void)
+{
+    static const uint8_t expected[][8]={
+        {0x52U,0x01U,0x01U,0xA5U,0x1FU,0U,0x01U,0U},
+        {0x52U,0x01U,0x02U,0xA6U,0x05U,0x19U,0xCDU,0xABU},
+        {0x52U,0x01U,0x03U,0xA7U,0xEFU,0xBEU,0xADU,0xDEU},
+        {0x52U,0x01U,0x04U,0xA8U,0x01U,0x08U,0U,0U}
+    };
+    static const unsigned reads[]={0U,1U,2U,2U};
+    CanLinkReadStatus before;
+    unsigned i;
+    Ready();
+    observed_status.status_word=0x12ABCD05U;
+    observed_status.fault_mask=0xDEADBEEFU;
+    observed_status.configured=7U; /* Boolean normalization, not a bitwise OR. */
+    before=observed_status;
+    for (i=0U;i<4U;++i) {
+        QueueQuery((uint8_t)(i+1U),(uint8_t)(0xA5U+i));
+        fifo_fill=8U;
+        CanLink_Poll();
+        CHECK(receive_calls == i+1U && send_calls == i+1U && fifo_fill == 7U);
+        CHECK(memcmp(sent_data,expected[i],8U)==0);
+        CHECK(can_query_rx_count == i+1U && can_link_rx_count == 0U);
+        CHECK(status_reads == reads[i] && ignored_status_reads == 0U);
+        CHECK(memcmp(&before,&observed_status,sizeof(before))==0);
+        CHECK(sent_header.MessageMarker == 0U);
+    }
+    fifo_fill=0U;
+    CanLink_Poll();
+    CHECK(receive_calls==4U && send_calls==4U && status_reads==2U);
+    CHECK(can_link_diag.tx_enqueued_count==4U && can_link_error_count==0U);
+    Queue(8U,0U,1U); CanLink_Poll();
+    CHECK(can_link_rx_count==1U && can_query_rx_count==4U && status_reads==2U);
+}
+static void QueryStatus(void)
+{
+    static const uint8_t flags[]={0x18U,0x19U,0x1AU,0x1CU,0x1FU};
+    unsigned i;
+    Ready();
+    for (i=0U;i<5U;++i) {
+        uint8_t expected[8]={0x52U,0x01U,0x02U,0xFFU,0x04U,0U,0x34U,0x12U};
+        memset(&observed_status,0,sizeof(observed_status));
+        observed_status.status_word=0x00123404U;
+        observed_status.configured=(i==1U || i==4U)?0x80U:0U;
+        observed_status.permit=(i==2U || i==4U)?0x80000000U:0U;
+        observed_status.output_enabled=(i==3U || i==4U)?2U:0U;
+        expected[5]=flags[i];
+        QueueQuery(2U,0xFFU); CanLink_Poll();
+        CHECK(memcmp(sent_data,expected,8U)==0);
+        CHECK(status_reads==i+1U && can_query_rx_count==i+1U);
+    }
+    CHECK(ignored_status_reads==0U);
+}
+static void QueryRejects(void)
+{
+    unsigned i;
+    Ready();
+    for (i=0U;i<16U;++i) {
+        QueueQuery(2U,0U);
+        switch(i) {
+        case 0: incoming_data[0]=0x52U; break; /* Response marker */
+        case 1: incoming_data[1]=0U; break;
+        case 2: incoming_data[1]=2U; break;
+        case 3: incoming_data[2]=0U; break;
+        case 4: incoming_data[2]=5U; break; /* No hidden control opcode */
+        case 5: incoming_data[2]=0xFFU; break;
+        case 6: incoming_data[4]=1U; break;
+        case 7: incoming_data[5]=2U; break;
+        case 8: incoming_data[6]=0x80U; break;
+        case 9: incoming_data[7]=0xFFU; break;
+        case 10: incoming.Identifier=0x322U; break;
+        case 11: incoming.IdType=1U; break;
+        case 12: incoming.RxFrameType=1U; break;
+        case 13: incoming.FDFormat=1U; break;
+        case 14: incoming.BitRateSwitch=1U; break;
+        default: incoming.DataLength=7U; break;
+        }
+        CanLink_Poll();
+        CHECK(can_link_diag.rejected_count==i+1U);
+        CHECK(send_calls==0U && free_calls==0U && status_reads==0U);
+        CHECK(can_query_rx_count==0U && can_link_rx_count==0U);
+    }
+}
+static void QueryDlc(void)
+{
+    unsigned dlc;
+    Ready();
+    for(dlc=0U;dlc<16U;++dlc) {
+        unsigned r=receive_calls, t=send_calls, p=status_reads;
+        QueueQuery(2U,0U);
+        host_message_ram[2U]=dlc<<16U;
+        CanLink_Poll();
+        if(dlc==8U) {
+            CHECK(receive_calls==r+1U && send_calls==t+1U && status_reads==p+1U);
+        } else {
+            CHECK(receive_calls==r && send_calls==t && status_reads==p);
+            CHECK(host_can_registers.RXF0A==0U);
+        }
+    }
+    CHECK(can_link_diag.rejected_count==15U && can_query_rx_count==1U);
+    CHECK(can_link_rx_count==0U);
+}
+static void QueryBusy(void)
+{
+    Ready();
+    fifo_free=0U;
+    QueueQuery(2U,0U); CanLink_Poll();
+    CHECK(can_query_rx_count==1U && can_link_rx_count==0U && send_calls==0U);
+    CHECK(can_link_diag.tx_busy_count==1U && can_link_error_count==1U);
+    CHECK(can_link_diag.error_flags==CAN_LINK_ERROR_TX_BUSY);
+    fifo_free=32U; fifo_fill=0U;
+    CanLink_Poll();
+    CHECK(send_calls==0U && can_link_diag.tx_enqueued_count==0U);
+    CHECK(status_reads<=1U); /* No retry/periodic sampling while idle. */
+}
+static void QueryHalFailure(int tx)
+{
+    Ready();
+    QueueQuery(2U,0U);
+    if(tx) send_result=HAL_ERROR; else receive_result=HAL_ERROR;
+    CanLink_Poll();
+    CHECK(receive_calls==1U && send_calls==(unsigned)tx);
+    CHECK(status_reads==(unsigned)tx);
+    CHECK(can_query_rx_count==(uint32_t)tx && can_link_rx_count==0U);
+    CHECK(can_link_diag.tx_enqueued_count==0U && can_link_error_count==1U);
+    CHECK(can_link_diag.error_flags==CAN_LINK_ERROR_HAL);
+}
+static void QueryBusOff(void)
+{
+    Ready();
+    QueueQuery(2U,0U);
+    host_can_registers.PSR=FDCAN_PSR_BO;
+    CanLink_Poll();
+    CHECK(can_link_diag.state==3U);
+    CHECK(receive_calls==0U && send_calls==0U && status_reads==0U);
+    CHECK(can_query_rx_count==0U && can_link_error_count==1U);
+}
+static void NoProvider(void)
+{
+    CanLink_Init(NULL);
+    CHECK(can_link_diag.state==2U);
+    CHECK(can_link_error_count==1U && can_link_diag.error_flags==CAN_LINK_ERROR_CONFIG);
+    CHECK(config_calls==0U && start_calls==0U);
+    CanLink_Init(ReadStatus);
+    QueueQuery(2U,0U); CanLink_Poll();
+    CHECK(can_link_error_count==1U && can_link_diag.state==2U);
+    CHECK(receive_calls==0U && send_calls==0U && status_reads==0U);
+}
+
 int main(int argc, char **argv)
 {
     CHECK(argc == 2);
@@ -311,6 +484,15 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "ram-error")) Latched(0, 0);
     else if (!strcmp(argv[1], "bad-index")) RuntimeGeometry(0);
     else if (!strcmp(argv[1], "overwrite")) RuntimeGeometry(1);
+    else if (!strcmp(argv[1], "query-valid")) QueryValid();
+    else if (!strcmp(argv[1], "query-status")) QueryStatus();
+    else if (!strcmp(argv[1], "query-rejects")) QueryRejects();
+    else if (!strcmp(argv[1], "query-dlc")) QueryDlc();
+    else if (!strcmp(argv[1], "query-busy")) QueryBusy();
+    else if (!strcmp(argv[1], "query-rx-fail")) QueryHalFailure(0);
+    else if (!strcmp(argv[1], "query-tx-fail")) QueryHalFailure(1);
+    else if (!strcmp(argv[1], "query-busoff")) QueryBusOff();
+    else if (!strcmp(argv[1], "no-provider")) NoProvider();
     else if (!strncmp(argv[1], "bad-config-", 11)) BadConfig((unsigned)atoi(argv[1] + 11));
     else if (!strncmp(argv[1], "init-fail-", 10)) InitFailure((unsigned)atoi(argv[1] + 10));
     else CHECK(0);

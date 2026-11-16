@@ -15,6 +15,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'CAN service HOST compile failed' }
     $canScenarios = @('valid', 'lengths', 'rejects', 'busy', 'rx-fail', 'tx-fail',
         'errors', 'busoff-ir', 'busoff-psr', 'ram-error', 'bad-index', 'overwrite')
+    $canScenarios += @('query-valid', 'query-status', 'query-rejects', 'query-dlc',
+        'query-busy', 'query-rx-fail', 'query-tx-fail', 'query-busoff', 'no-provider')
     $canScenarios += 0..6 | ForEach-Object { 'bad-config-' + $_ }
     $canScenarios += 1..4 | ForEach-Object { 'init-fail-' + $_ }
     foreach ($canScenario in $canScenarios) {

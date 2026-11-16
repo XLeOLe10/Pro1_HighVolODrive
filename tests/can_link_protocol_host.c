@@ -133,10 +133,137 @@ static void RejectedFrames(void)
     CHECK(memcmp(original, &request, sizeof(request)) == 0);
 }
 
+
+/* Wire contract tests use literal packets/bytes, independent of the encoder. */
+static CanLinkFrame Query(uint8_t opcode, uint8_t token)
+{
+    CanLinkFrame request = Ping();
+    static const uint8_t prefix[8] = {0x51U, 0x01U, 0x01U, 0U, 0U, 0U, 0U, 0U};
+    memcpy(request.data, prefix, sizeof(prefix));
+    request.data[2] = opcode;
+    request.data[3] = token;
+    return request;
+}
+
+static void CheckQueryReply(const CanLinkFrame *reply, const uint8_t data[8])
+{
+    CHECK(reply->id == 0x322U);
+    CHECK(reply->extended == 0U && reply->remote == 0U);
+    CHECK(reply->fd == 0U && reply->brs == 0U);
+    CHECK(reply->length == 8U);
+    CHECK(memcmp(reply->data, data, 8U) == 0);
+}
+
+static void RejectQuery(const CanLinkFrame *request)
+{
+    CanLinkFrame reply;
+    unsigned char before[sizeof(reply)];
+    memset(&reply, 0x6D, sizeof(reply));
+    memcpy(before, &reply, sizeof(reply));
+    CHECK(CanLinkProtocol_QueryOpcode(request) == 0U);
+    CHECK(CanLinkProtocol_MakeQueryReply(request, 0x01234567U, &reply) == 0);
+    CHECK(memcmp(&reply, before, sizeof(reply)) == 0);
+}
+
+static void ValidQueries(void)
+{
+    static const uint32_t values[] = {
+        0U, 0xFFFFFFFFU, 0x01234567U, 0x80000000U, 0x0001001FU
+    };
+    static const uint8_t value_bytes[][4] = {
+        {0U,0U,0U,0U}, {0xFFU,0xFFU,0xFFU,0xFFU},
+        {0x67U,0x45U,0x23U,0x01U}, {0U,0U,0U,0x80U},
+        {0x1FU,0U,0x01U,0U}
+    };
+    CanLinkFrame request, reply;
+    unsigned char before[sizeof(request)];
+    unsigned opcode, token, v;
+    uint8_t expected[8] = {0x52U,0x01U,0U,0U,0U,0U,0U,0U};
+    CHECK(CAN_QUERY_INFO == 1U && CAN_QUERY_STATUS == 2U);
+    CHECK(CAN_QUERY_FAULT == 3U && CAN_QUERY_BUILD == 4U);
+    CHECK(CAN_QUERY_INFO_VALUE == 0x0001001FU);
+    CHECK(CAN_QUERY_BUILD_REVISION == 0x00000801U);
+    for (opcode=1U; opcode<=4U; ++opcode) {
+        for (token=0U; token<256U; ++token) {
+            request=Query((uint8_t)opcode,(uint8_t)token);
+            memcpy(before,&request,sizeof(request));
+            expected[2]=(uint8_t)opcode;
+            expected[3]=(uint8_t)token;
+            memcpy(expected+4U,value_bytes[2],4U);
+            CHECK(CanLinkProtocol_QueryOpcode(&request) == opcode);
+            CHECK(CanLinkProtocol_MakeQueryReply(&request,values[2],&reply) == 1);
+            CheckQueryReply(&reply,expected);
+            CHECK(memcmp(before,&request,sizeof(request)) == 0);
+            /* A query is not accidentally accepted as a legacy PING. */
+            ExpectRejected(&request);
+        }
+        for (v=0U; v<sizeof(values)/sizeof(values[0]); ++v) {
+            request=Query((uint8_t)opcode,0xA5U);
+            expected[2]=(uint8_t)opcode;
+            expected[3]=0xA5U;
+            memcpy(expected+4U,value_bytes[v],4U);
+            CHECK(CanLinkProtocol_MakeQueryReply(&request,values[v],&request) == 1);
+            CheckQueryReply(&request,expected);
+            /* Replies never trigger a request/reply loop. */
+            RejectQuery(&request);
+        }
+    }
+}
+
+static void InvalidQueries(void)
+{
+    static const uint32_t ids[]={0U,0x320U,0x322U,0x7FFU,0x800U,0x1FFFFFFFU,0xFFFFFFFFU};
+    static const uint8_t flags[]={1U,2U,255U};
+    unsigned i, bit, byte;
+    CanLinkFrame request;
+    unsigned char before[sizeof(request)];
+    for (i=0U;i<sizeof(ids)/sizeof(ids[0]);++i) {
+        request=Query(1U,0U); request.id=ids[i]; RejectQuery(&request);
+    }
+    for (i=0U;i<sizeof(flags)/sizeof(flags[0]);++i) {
+        request=Query(1U,0U); request.extended=flags[i]; RejectQuery(&request);
+        request=Query(1U,0U); request.remote=flags[i]; RejectQuery(&request);
+        request=Query(1U,0U); request.fd=flags[i]; RejectQuery(&request);
+        request=Query(1U,0U); request.brs=flags[i]; RejectQuery(&request);
+    }
+    for (i=0U;i<256U;++i) {
+        if (i != 8U) {
+            request=Query(1U,0U); request.length=(uint8_t)i; RejectQuery(&request);
+        }
+        if (i != 1U) {
+            request=Query(1U,0U); request.data[1]=(uint8_t)i; RejectQuery(&request);
+        }
+        if (i < 1U || i > 4U) {
+            request=Query((uint8_t)i,0U); RejectQuery(&request);
+        }
+        if (i != 0x51U) {
+            request=Query(1U,0U); request.data[0]=(uint8_t)i; RejectQuery(&request);
+        }
+    }
+    for (byte=4U;byte<8U;++byte) {
+        for (bit=0U;bit<8U;++bit) {
+            request=Query(1U,0xFFU);
+            request.data[byte]=(uint8_t)(1U<<bit);
+            RejectQuery(&request);
+        }
+    }
+    request=Ping(); RejectQuery(&request);
+    RejectQuery(NULL);
+    request=Query(1U,0U);
+    CHECK(CanLinkProtocol_MakeQueryReply(&request,0U,NULL) == 0);
+    CHECK(CanLinkProtocol_MakeQueryReply(NULL,0U,NULL) == 0);
+    request.data[7]=1U;
+    memcpy(before,&request,sizeof(request));
+    CHECK(CanLinkProtocol_MakeQueryReply(&request,0U,&request) == 0);
+    CHECK(memcmp(before,&request,sizeof(request)) == 0);
+}
+
 int main(void)
 {
     ValidFrames();
     RejectedFrames();
+    ValidQueries();
+    InvalidQueries();
     printf("CAN protocol HOST PASS: %u assertions\n", checks);
     return EXIT_SUCCESS;
 }
