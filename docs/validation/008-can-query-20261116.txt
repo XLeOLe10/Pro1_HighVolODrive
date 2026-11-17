@@ -454,3 +454,770 @@ SHA256 docs/validation/008-can-query-20261116-status.png c68b0dee62a49f727b4e26f
 Closeout: read-only query limited hardware checkpoint ready for user review/commit.
 Next: define and integrate CAN STOP/control transaction while maintaining disabled-output test profile.
 All earlier NOT_RUN statements above are historical; this append only supersedes the limited scope listed here.
+
+
+========== 008.02 STOP / APPENDED EVIDENCE ==========
+Recorded local time: 2026-11-16T22:16:11
+Base: Xiao_ODrive / 488d481435b8fbb6ad356128100fe42696423ecb + working-tree STOP changes listed below
+Release: 0x00000802; INFO 0x0001003F; classic321/322 DLC8. Pure C.
+Scope: no new files; no CubeMX change, Git stage/commit, download or hardware operation.
+SRC PASS independent review; BUILD PASS both targets; HOST PASS; HW NOT_RUN for 008.02.
+Old 008.01 hardware screenshots do not verify this revision. User Watch-only uvoptx remains untouched.
+STOP sole runtime producer: auto Bench Init/Step unscheduled and removed in link map.
+One retained appTask-owned request_id/ticket; monotonic nonzero no-wrap IDs; no cross-reset session.
+Same ID returns historical accepted/processed result without issuing another Stop. Larger new intent required.
+TX failure retains result; Bus-Off still stops CAN service only. No physical stop/latency certification.
+Protocol HOST:35533; service HOST:47 scenarios/1830 assertions; core203+FOC407; bench139+port31/93+safety102=365; profile cases9.
+Core integration uses real axis_command_core with mock HAL. Port/safety suites use hardware stubs.
+Old Cygwin FAST_CWD warnings retained below; all suites passed; not ARMCC build warnings.
+Bench ROM compressed=63784 B; RW+ZI=25872 B (AXI); normal ROM=60684 B; RW+ZI=25712 B. DTCM used0.
+Bench self-frame sizes from linker htm: ReadCanStatus16, RequestCanStop8, HandleStop40, CanLink_Poll144 B. NOT complete dynamic worst stack.
+ReadStatus copy24B; pointer callbacks and IRQ nesting are not bounded by self-frame sums. New board timing/stack NOT_RUN.
+
+Product files changed:
+Core/Inc/can_link.h
+Core/Inc/can_link_protocol.h
+Core/Src/app_runtime.c
+Core/Src/can_link.c
+Core/Src/can_link_protocol.c
+
+Log transcripts below use UTF-8/LF with trailing whitespace removed; each SHA256 labels the original log bytes in build/, not the transcript encoding.
+
+BUILD COMMANDS (incremental, no rebuild):
+D:\UV4\UV4.exe -b MDK-ARM\FOC_T.uvprojx -t FOC_T_CommandBench -o build\008-can-stop\bench-build.txt
+D:\UV4\UV4.exe -b MDK-ARM\FOC_T.uvprojx -t FOC_T -o build\008-can-stop\normal-build.txt
+
+HOST ENTRIES:
+tests/run-can-host.ps1
+tests/run-can-service-host.ps1
+tests/run-command-host.ps1
+Python310/python.exe tests/run_command_bench_host.py
+
+--- RAW build\008-can-stop\bench-build.txt SHA256 72b4447959509c544bf8729b11e799a87964c23db1498f4db107b027e9e4c660 ---
+*** Using Compiler 'V5.06 update 7 (build 960)', folder: 'D:\ARM\ARMCC\Bin'
+Build target 'FOC_T_CommandBench'
+compiling can_link_protocol.c...
+compiling can_link.c...
+compiling app_runtime.c...
+linking...
+Program Size: Code=62772 RO-data=904 RW-data=880 ZI-data=24992
+FromELF: creating hex file...
+"FOC_T_CommandBench\FOC_T_CommandBench.axf" - 0 Error(s), 0 Warning(s).
+Build Time Elapsed:  00:00:16
+
+--- RAW build\008-can-stop\normal-build.txt SHA256 81521dac20e6d31c137fa9252347211a1a1bfa86de0afd3538cf3af9884deff6 ---
+*** Using Compiler 'V5.06 update 7 (build 960)', folder: 'D:\ARM\ARMCC\Bin'
+Build target 'FOC_T'
+compiling can_link.c...
+compiling can_link_protocol.c...
+compiling app_runtime.c...
+linking...
+Program Size: Code=59680 RO-data=904 RW-data=776 ZI-data=24936
+FromELF: creating hex file...
+"FOC_T\FOC_T.axf" - 0 Error(s), 0 Warning(s).
+Build Time Elapsed:  00:00:10
+
+--- RAW build\008-can-stop\can-protocol.log SHA256 1891d6e0c55cc0b60939e8d6dc46cb1223e2f357aeeb64b852dab1a86b9ece3a ---
+      0 [main] gcc 179264 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+gcc (GCC) 4.5.3
+Copyright (C) 2010 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+      0 [main] gcc 165344 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+      0 [main] can_link_protocol_host 158892 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN protocol HOST PASS: 35533 assertions
+HOST CAN protocol suite PASS
+
+--- RAW build\008-can-stop\can-service.log SHA256 52df67069b91336ab1a06a938bfb28f0c796815b57a59c520fa378c2ff24d1d5 ---
+      0 [main] gcc 163268 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+      0 [main] can_link_service_host 150560 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service valid: 35 assertions PASS
+      0 [main] can_link_service_host 181104 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service lengths: 88 assertions PASS
+      0 [main] can_link_service_host 181844 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service rejects: 52 assertions PASS
+      0 [main] can_link_service_host 178336 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service busy: 25 assertions PASS
+      0 [main] can_link_service_host 156020 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service rx-fail: 22 assertions PASS
+      0 [main] can_link_service_host 172824 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service tx-fail: 28 assertions PASS
+      0 [main] can_link_service_host 174448 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service errors: 26 assertions PASS
+      0 [main] can_link_service_host 172832 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service busoff-ir: 22 assertions PASS
+      0 [main] can_link_service_host 55132 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service busoff-psr: 21 assertions PASS
+      0 [main] can_link_service_host 176772 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service ram-error: 22 assertions PASS
+      1 [main] can_link_service_host 181676 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service bad-index: 19 assertions PASS
+      0 [main] can_link_service_host 164188 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service overwrite: 19 assertions PASS
+      0 [main] can_link_service_host 179448 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service query-valid: 91 assertions PASS
+      0 [main] can_link_service_host 178772 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service query-status: 77 assertions PASS
+      1 [main] can_link_service_host 180620 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service query-rejects: 112 assertions PASS
+      1 [main] can_link_service_host 178824 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service query-dlc: 74 assertions PASS
+      1 [main] can_link_service_host 179524 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service query-busy: 27 assertions PASS
+      0 [main] can_link_service_host 149728 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service query-rx-fail: 24 assertions PASS
+      0 [main] can_link_service_host 161764 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service query-tx-fail: 31 assertions PASS
+      0 [main] can_link_service_host 175332 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service query-busoff: 19 assertions PASS
+      0 [main] can_link_service_host 180208 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service no-provider: 8 assertions PASS
+      0 [main] can_link_service_host 159324 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service stop-valid: 77 assertions PASS
+      0 [main] can_link_service_host 139792 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service stop-ordering: 94 assertions PASS
+      0 [main] can_link_service_host 154200 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service stop-tx-busy: 49 assertions PASS
+      0 [main] can_link_service_host 177144 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service stop-tx-fail: 54 assertions PASS
+      0 [main] can_link_service_host 152500 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service stop-rejected: 87 assertions PASS
+      1 [main] can_link_service_host 171452 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service stop-invalid: 75 assertions PASS
+      0 [main] can_link_service_host 175276 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service stop-dlc: 72 assertions PASS
+      1 [main] can_link_service_host 182064 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service stop-busoff: 17 assertions PASS
+      0 [main] can_link_service_host 170108 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service stop-rx-fail: 20 assertions PASS
+      1 [main] can_link_service_host 181652 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service stop-no-provider: 4 assertions PASS
+      0 [main] can_link_service_host 176164 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service stop-max-id: 52 assertions PASS
+      0 [main] can_link_service_host 179568 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service stop-core-0: 75 assertions PASS
+      1 [main] can_link_service_host 162236 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service stop-core-1: 71 assertions PASS
+      0 [main] can_link_service_host 13708 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service stop-core-2: 68 assertions PASS
+      1 [main] can_link_service_host 181616 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service stop-core-3: 69 assertions PASS
+      0 [main] can_link_service_host 181216 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service bad-config-0: 6 assertions PASS
+      0 [main] can_link_service_host 174412 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service bad-config-1: 6 assertions PASS
+      0 [main] can_link_service_host 176300 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service bad-config-2: 6 assertions PASS
+      0 [main] can_link_service_host 156092 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service bad-config-3: 6 assertions PASS
+      0 [main] can_link_service_host 172052 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service bad-config-4: 6 assertions PASS
+      0 [main] can_link_service_host 175752 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service bad-config-5: 6 assertions PASS
+      0 [main] can_link_service_host 142048 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service bad-config-6: 6 assertions PASS
+      1 [main] can_link_service_host 173900 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service init-fail-1: 12 assertions PASS
+      0 [main] can_link_service_host 177592 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service init-fail-2: 15 assertions PASS
+      0 [main] can_link_service_host 179388 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service init-fail-3: 17 assertions PASS
+      0 [main] can_link_service_host 182084 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN service init-fail-4: 18 assertions PASS
+CAN service HOST: 47 scenarios PASS
+
+--- RAW build\008-can-stop\command-host.log SHA256 b85a735d47bbfc950ab4d4ef791eb3bc3f8af33e299d7677dc34e71c768f41eb ---
+      0 [main] gcc 178780 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+gcc (GCC) 4.5.3
+Copyright (C) 2010 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+      0 [main] gcc 62740 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+      1 [main] axis_command_host_tests 179796 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+validation/configuration/finite values
+whole-frame A/B, full slot and separate acceptance/application
+STOP full-slot priority/idempotence/old epoch rejection
+START readiness rejection and UPDATE lifecycle
+pending/active expiry, no renewal of expired run, tick wrap/ambiguity
+fault after publication and final-gate fault, sticky denial
+bad sequence/epoch and all metadata exhaustion paths
+limit decrease on non-slow-loop tick; invalid clamp inputs
+PASS: 8 scenarios, 203 assertions; synthetic HOST limits only.
+Boundary: sequential core tests do not prove Cortex-M7 PRIMASK timing or physical PWM safety.
+      0 [main] gcc 169900 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+      1 [main] open_foc_command_host 182220 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+PASS: 407 FOC command integration assertions; CPU register stubs only
+HOST command and FOC integration suites PASS
+
+--- RAW build\008-can-stop\port-bench-host.log SHA256 e27aab08c9048c3462a64350fbddf12b4dbb99f46c1df798be77c20afd64a228 ---
+139 assertions
+31 real command port assertions
+93 real command port assertions
+102 safety profile assertions
+PROFILE PASS: default_normal
+PROFILE PASS: explicit_normal
+PROFILE PASS: normal_disabled
+PROFILE PASS: bench_disabled
+PROFILE PASS: bench_missing_power
+PROFILE PASS: bench_gpio
+PROFILE PASS: bench_always_on
+PROFILE PASS: invalid_bench_value
+PROFILE PASS: normal_always_on
+PASS: 365 new behavior assertions + 9 profile cases; no hardware operation
+
+--- LOG TRANSCRIPT command-bench detailed log ---
+CPU-only bench verification; target IRQ timing / physical outputs NOT tested.
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe --version
+      0 [main] gcc 158328 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+gcc (GCC) 4.5.3
+Copyright (C) 2010 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -pedantic -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=1 -DBOARD_POWER_STAGE_MODE=0 tests/axis_command_bench_host.c Core/Src/axis_command_bench.c Core/Src/axis_command_core.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/bench_sequence.exe
+      0 [main] gcc 177720 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/bench_sequence.exe
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/bench_sequence.exe
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\stm32H750\High_fengshan\FOC_T\build\command-bench-host\bench_sequence.exe
+      0 [main] bench_sequence 138728 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+complete round: async consumer / HAL and control counter wrap
+complete round: async consumer / HAL and control counter wrap
+complete round: consume before Submit returns
+startup stable-ready delay; startup timeout; readiness loss
+unsafe output, fault, ISR overrun, failed snapshot each latch FAIL
+TIM1 stall before apply and after expiry cannot falsely PASS
+lost application/STOP acknowledgement; mixed old/new frame detection
+late task must observe START application before claiming expiry success
+PASS: 8 bench sequencer groups / 139 assertions; real command core, simulated port.
+No assertion proves hardware inhibition, IRQ timing or physical current safety.
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -pedantic -I tests/port_stubs -I Core/Inc tests/axis_command_port_host.c Core/Src/axis_command.c Core/Src/axis_command_core.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/port_normal.exe
+      1 [main] gcc 165652 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/port_normal.exe
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/port_normal.exe
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\stm32H750\High_fengshan\FOC_T\build\command-bench-host\port_normal.exe
+      0 [main] port_normal 175492 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+PASS: 31 real command port assertions (BENCH=0); deterministic CPU stubs only
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -pedantic -I tests/port_stubs -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=1 -DBOARD_POWER_STAGE_MODE=0 tests/axis_command_port_host.c Core/Src/axis_command.c Core/Src/axis_command_core.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/port_bench.exe
+      0 [main] gcc 181568 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/port_bench.exe
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/port_bench.exe
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\stm32H750\High_fengshan\FOC_T\build\command-bench-host\port_bench.exe
+      0 [main] port_bench 165352 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+PASS: 93 real command port assertions (BENCH=1); deterministic CPU stubs only
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=1 -DBOARD_POWER_STAGE_MODE=0 tests/safety_profile_host.c Core/Src/board_safety.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/safety_profile.exe
+      0 [main] gcc 177344 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/safety_profile.exe
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/safety_profile.exe
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\stm32H750\High_fengshan\FOC_T\build\command-bench-host\safety_profile.exe
+      0 [main] safety_profile 158968 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+PASS: 102 safety profile assertions; actual board_safety.c with CPU register stubs only
+Boundary: BSRR requests are asserted; ODR fixture is explicit, not a model of physical pin transitions.
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DEXPECT_BENCH=0 -DEXPECT_POWER=1 -c tests/safety_config_probe.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/default_normal_probe.o
+      0 [main] gcc 152464 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/default_normal_probe.o
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/default_normal_probe.o
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -c Core/Src/board_safety.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/default_normal_actual.o
+      0 [main] gcc 176996 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/default_normal_actual.o
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/default_normal_actual.o
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=0 -DBOARD_POWER_STAGE_MODE=1 -DEXPECT_BENCH=0 -DEXPECT_POWER=1 -c tests/safety_config_probe.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/explicit_normal_probe.o
+      0 [main] gcc 161076 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/explicit_normal_probe.o
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/explicit_normal_probe.o
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=0 -DBOARD_POWER_STAGE_MODE=1 -c Core/Src/board_safety.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/explicit_normal_actual.o
+      0 [main] gcc 178728 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/explicit_normal_actual.o
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/explicit_normal_actual.o
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=0 -DBOARD_POWER_STAGE_MODE=0 -DEXPECT_BENCH=0 -DEXPECT_POWER=0 -c tests/safety_config_probe.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/normal_disabled_probe.o
+      0 [main] gcc 175720 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/normal_disabled_probe.o
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/normal_disabled_probe.o
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=0 -DBOARD_POWER_STAGE_MODE=0 -c Core/Src/board_safety.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/normal_disabled_actual.o
+      0 [main] gcc 178612 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/normal_disabled_actual.o
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/normal_disabled_actual.o
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=1 -DBOARD_POWER_STAGE_MODE=0 -DEXPECT_BENCH=1 -DEXPECT_POWER=0 -c tests/safety_config_probe.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/bench_disabled_probe.o
+      0 [main] gcc 181024 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/bench_disabled_probe.o
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/bench_disabled_probe.o
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=1 -DBOARD_POWER_STAGE_MODE=0 -c Core/Src/board_safety.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/bench_disabled_actual.o
+      0 [main] gcc 178260 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/bench_disabled_actual.o
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/bench_disabled_actual.o
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=1 -DEXPECT_BENCH=1 -DEXPECT_POWER=1 -c tests/safety_config_probe.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/bench_missing_power_probe.o
+      0 [main] gcc 180432 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+In file included from tests/safety_config_probe.c:1:0:
+Core/Inc/board_config.h:31:2: error: #error "Command bench requires BOARD_POWER_STAGE_DISABLED."
+EXIT: 1
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=1 -DBOARD_POWER_STAGE_MODE=1 -DEXPECT_BENCH=1 -DEXPECT_POWER=1 -c tests/safety_config_probe.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/bench_gpio_probe.o
+      0 [main] gcc 181848 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+In file included from tests/safety_config_probe.c:1:0:
+Core/Inc/board_config.h:31:2: error: #error "Command bench requires BOARD_POWER_STAGE_DISABLED."
+EXIT: 1
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=1 -DBOARD_POWER_STAGE_MODE=2 -DEXPECT_BENCH=1 -DEXPECT_POWER=2 -c tests/safety_config_probe.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/bench_always_on_probe.o
+      0 [main] gcc 89568 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+In file included from tests/safety_config_probe.c:1:0:
+Core/Inc/board_config.h:31:2: error: #error "Command bench requires BOARD_POWER_STAGE_DISABLED."
+EXIT: 1
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=2 -DBOARD_POWER_STAGE_MODE=0 -DEXPECT_BENCH=2 -DEXPECT_POWER=0 -c tests/safety_config_probe.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/invalid_bench_value_probe.o
+      1 [main] gcc 176200 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+In file included from tests/safety_config_probe.c:1:0:
+Core/Inc/board_config.h:28:2: error: #error "AXIS_COMMAND_BENCH_ENABLE must be 0 or 1."
+EXIT: 1
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=0 -DBOARD_POWER_STAGE_MODE=2 -DEXPECT_BENCH=0 -DEXPECT_POWER=2 -c tests/safety_config_probe.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/normal_always_on_probe.o
+      0 [main] gcc 140440 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/normal_always_on_probe.o
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/command-bench-host/normal_always_on_probe.o
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -Wall -Wextra -Werror -Wno-missing-field-initializers -I tests/host_safety -I Core/Inc -DAXIS_COMMAND_BENCH_ENABLE=0 -DBOARD_POWER_STAGE_MODE=2 -c Core/Src/board_safety.c -o D:/stm32H750/High_fengshan/FOC_T/build/command-bench-host/normal_always_on_actual.o
+      1 [main] gcc 181932 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+Core/Src/board_safety.c:8:2: error: #error "RTOS bring-up requires a gate EN; ALWAYS_ON needs a separate startup design."
+EXIT: 1
+
+PASS: 365 new behavior assertions + 9 profile cases
+
+--- PRODUCTION INPUT SHA256 (187) ---
+2626d799e93ce8b0204d4d8ccc871301ac775b0817cf1cba3c884181d3a2bcfa  Core/Inc/ad2s1210.h
+e36acfe1b822eff1de7e9f93073b8da32c94dd5b09484b716e190c6aa63eb3d0  Core/Inc/adc.h
+d3be7141aa698c1e1cb85b5871671c5a2a1b9fde77f2bd535407fb6cf1ccfed8  Core/Inc/app_policy.h
+24beb149468339520540f39cf1c4bcad9da5b8e30ef46cf4613ca512206e891f  Core/Inc/app_runtime.h
+f4e21847e3f3bdfd441db3edec7a987d6c2c5ef1d8b995c006b5a161113c1079  Core/Inc/axis_command.h
+0ef8c408d9167580553b2873ef72fee05eaa8bb617f65cf7cafcf99344b35ab2  Core/Inc/axis_command_bench.h
+d74fe8d9c30bdf5bea508d8c8ed4b4d542b5be9e900d28b2e37c55a3461d4692  Core/Inc/axis_command_core.h
+7672d284d376a1f636fa85e7c092fb4b7613493382e584023bf5ead5a6e1d2ab  Core/Inc/axis_status.h
+9100c8d19c328b70a433476d810aabd8247c45df4152e667733f0bf0e861f30a  Core/Inc/board_config.h
+7c4b7d0091677adb66583a0bc92e6de98b5cb035cf6421234acbdd6dd21ef1bb  Core/Inc/board_safety.h
+b8a595f027dc426f4fac8e824ee174461b698111deeccf07532f0b761f15f987  Core/Inc/can_link.h
+9c30fb502c92ab4d5b49312b6f0df94151b32da9625afb51f89cc9b368632337  Core/Inc/can_link_protocol.h
+7c7fd96f56582b2072085f01281925c9cbbc4c517c035c93da8b919ec8cf5209  Core/Inc/current_monitor.h
+bb9c2893bb03d3eae2e843e22fd799822b56731dfbd4cb15d36d4f7cdbbd34de  Core/Inc/current_sense.h
+3e9c0a58db27c4b325f875b8ce28c73e2114342ff67f59def3098bc291f571a9  Core/Inc/fdcan.h
+1be63ae9823901bf7a9d16d69458d9e2a67796001b383c841240bf4b294d3e12  Core/Inc/FreeRTOSConfig.h
+e2d62f964a0b7f238384ed6a20a181d09df9647240a268dc547acf5b35099f74  Core/Inc/gpio.h
+ac84bb9aa36cc4ce607c37031c90451cb8c2af024cfa520e73824fdda34fa206  Core/Inc/main.h
+bbc397468b0db653c7d01badaa9f202a34b699476ffa6cdfde8a929870245fab  Core/Inc/open_foc.h
+7ee08a1f7b3c518b8f1a33e73ee2d18830c1336be9341e774e73f137984491d8  Core/Inc/spi.h
+f6140475363886220c09144786efcf7ea806b402064d14ff16715191493eb40e  Core/Inc/stm32h7xx_hal_conf.h
+b79c96b9547cdc2ab4b4d06949a0f38c69cf58961c5372e49809c010625a26f5  Core/Inc/stm32h7xx_it.h
+c42a3f9267a7b8525d9d5e068d9759c7ed2e1d4ff3cf5792147a662c16fa5819  Core/Inc/telemetry_format.h
+9a14d52571fd5da86fd2013778bd509f1bfa506baaf0997b555eeeb5f00424aa  Core/Inc/tim.h
+b57eee246dfa6d43d3188845b3f5a21ae2fff22ccfc58317d6e51a26e994cbbb  Core/Inc/usart.h
+e78964121de15301dd0ac1930d28731a098ed76e2071a4f7ded8dd35102f5e38  Core/math/Xmath.c
+e4964a56a59e7e7135c224ad62e553440ed9232028224bc3de32e196a42894d0  Core/math/Xmath.h
+77c9dd8b9470ae5c81cadc17ae303f1d23e9ccaa9183b90ce89223d2bce174ae  Core/Src/ad2s1210.c
+b9fa07c9454db6a3328054e0cf6e968d3d7f9381444c0184ae4be546ed933e39  Core/Src/adc.c
+fc24b16230cf0dfe20d217c42759617bcb391020cd3a43e3e25d4491ddc13daf  Core/Src/app_runtime.c
+5f1f4a9df1e64e697561dd83bbb34a268c0c614288c18fea9a033f45ac405201  Core/Src/axis_command.c
+4309354ffb956e0105ad4d1f889e79d30d73ad9f3ea436aeebc1a7845982daa0  Core/Src/axis_command_bench.c
+7a7f6198d17a06c75cb4b63d5ef97a9eb248e758c09c0848bf14b877140c930a  Core/Src/axis_command_core.c
+097424ef92a573dc910baee11b4dd95cae4c043408a18aecd9e63a050e332cdb  Core/Src/axis_status.c
+1fa33a84c0c29cb73838940c2dfab96b0f6b5bf6f602760f53921ab69a723926  Core/Src/board_safety.c
+1c7d0cb89bdb56092917a890c1955eeb03d82fa617512b7dacba15e96206dc0c  Core/Src/can_link.c
+7d222e2bd5c11b504711719ead9820460d3b3a95b4d111a8868edb4c18f1406e  Core/Src/can_link_protocol.c
+f7289c7167a8652ed92932dea42466907f68204d4623686119c8c7ebacc42d1c  Core/Src/current_monitor.c
+baec2fde6b801e013510e8de5b96c0e2b48f79b6217c6665cb730f18492c9e71  Core/Src/current_sense.c
+43a5930f45419cadc01fbc48aa240320ba89e5cdb872ac9822902186094d0722  Core/Src/fdcan.c
+6bea976f89ce73634cfd16b2d31adc33335702635289bed02da505a38d4825e7  Core/Src/freertos.c
+9bb87d4c22767d84ccdd2d8e0adf7fcccdb2e5b06b705860afe3a7bb23910551  Core/Src/gpio.c
+e7b718a54e4c0dfcda11f410df885c5f03cb6827e26c451ce354c754224c7e0e  Core/Src/main.c
+6f2c934773baa9caf6c287fca3ad122b37d8847c0cd6b832a74fbb708d756e61  Core/Src/open_foc.c
+bb034ce7995718329d99426ad6dcd80c288ad1bfe8e056401bb672fe1c8c9e91  Core/Src/spi.c
+68a4dc02d0cf8c38ff4196f30b8079d614eb6ec98a38d89650ff7ba75e4db3f5  Core/Src/stm32h7xx_hal_msp.c
+2578954b6c15ef60203c62c09e3184b06b40c717624dabdd83ed182ba81f015f  Core/Src/stm32h7xx_hal_timebase_tim.c
+bf2533d4e7e319457f78570be374a42b624a6d5ab06797596dc4accc099c6256  Core/Src/stm32h7xx_it.c
+2ea5c2bd1c55e454fcbe26612c0b2a57f321fffb857ccd92844682288dd62518  Core/Src/system_stm32h7xx.c
+aa2e8d7773dca6d83086e74048057c117e5b91368002150a0a1c289a84e97a2d  Core/Src/telemetry_format.c
+f82e8ec5f68fdb49837a2b083494550e9d7ca0bdb786da126beda8c0f5d72604  Core/Src/tim.c
+9574d08633306beceb86d12f4f5e62c19ac9978d8f0ca266970a895758b118e9  Core/Src/usart.c
+7caed5502c7b277eb53f8f4af40ff7f26ffccfc6b7648e6223dab869382d1a20  Drivers/CMSIS/Device/ST/STM32H7xx/Include/stm32h750xx.h
+9bad4fffca7a09b179e6be9d55204eff634cda7e2cec620a79002f6f4d0e0bcf  Drivers/CMSIS/Device/ST/STM32H7xx/Include/stm32h7xx.h
+edbd2ae253530241ca82470fde1db4de1b0ba856590d69b17d3342b952c1fcba  Drivers/CMSIS/Device/ST/STM32H7xx/Include/system_stm32h7xx.h
+5a80286d68d0b4478895a222da683c8ca561d3bcf6392aaaea225d4a117c843e  Drivers/CMSIS/Include/cmsis_armcc.h
+e24f4bd1548b94e0ad424f4f13f59a4db4ca5aad7b644d10a893a330775d3003  Drivers/CMSIS/Include/cmsis_armclang.h
+e8f040e9ef61e466cc751677ab3c413a463cb74d1fc33fb6dfd94225bd93c8c1  Drivers/CMSIS/Include/cmsis_armclang_ltm.h
+b51963d271c1571ca3463654c76aa7ea50c4eac5d0a2710df10414ac64d9e0f8  Drivers/CMSIS/Include/cmsis_compiler.h
+1fba3e120e5c0a439e0982bd37fae04bd033dbd14187428214462a1707c56252  Drivers/CMSIS/Include/cmsis_gcc.h
+820bcd68b0a92f97abf5cdde6413e5e842fb286e0514be2c1be1547bb2dd2e7d  Drivers/CMSIS/Include/cmsis_iccarm.h
+1b2c47a90e9ae741c8fd4d0f323495327b25ff5d555a6c7afd6749a65ba1bb8e  Drivers/CMSIS/Include/cmsis_version.h
+b4bc83a6ff10fd2fb7e4c0abefdbd447eb7f78f3db898ca9aac5676307e2b862  Drivers/CMSIS/Include/core_armv81mml.h
+74b92c994af7355e222b45a0342754840b7221b611ef95bd206345879cc2caaa  Drivers/CMSIS/Include/core_armv8mbl.h
+77255f30508cf0d225f8b72207e28bf81353f8b353e8b120132c6db7e9bead9e  Drivers/CMSIS/Include/core_armv8mml.h
+52e8826259be4fcb10d0de2d3655c24d52436e54cd1509f3beb1a31a45524f38  Drivers/CMSIS/Include/core_cm0.h
+36e9aec815eef944241e5fed7085845346de6bcb5ba30561f956356b393ba5f0  Drivers/CMSIS/Include/core_cm0plus.h
+944bf0c4f940eef30a632cd99d5dcfe8270e8a8431eb98c0f081bcf4f61f728e  Drivers/CMSIS/Include/core_cm1.h
+f04d3e5f385b0ff219a75f6648acabf7debb779a72f0628573b64dac5ad49fdc  Drivers/CMSIS/Include/core_cm23.h
+0191499015f3af7b37ce83092df29d1d63dbba9fa5f31b6d2341a2e850b20cb4  Drivers/CMSIS/Include/core_cm3.h
+3566c5bf835091b1cc46baf6e9b6ce94d83dd0885e0db122f43e901e9326945a  Drivers/CMSIS/Include/core_cm33.h
+1f6da4c033261293acb8f0a7da42a0e9b6ab392c9462cc26f5e3e35d4db4e2d3  Drivers/CMSIS/Include/core_cm35p.h
+53d609b900c262650fcaf5a48eabd0fa299c3ac4d1426eb0f20e2aab053f8abb  Drivers/CMSIS/Include/core_cm4.h
+34d91327a5f1b251c54fa6bb532d9f5ec0423bf3b7f2b679c8f7b3df95af0fc8  Drivers/CMSIS/Include/core_cm7.h
+cc9037b32401824436d251de860799fcdbab3cf69e2321438c8f446f3f342526  Drivers/CMSIS/Include/core_sc000.h
+e6a78d85b3ca77e35dc512e32e535028a46e156adab8629360fa4b7fe6731827  Drivers/CMSIS/Include/core_sc300.h
+c9ad7cc99ba0481365550ae997c63cde9732d067d9ec0de28b0d6ac39280656d  Drivers/CMSIS/Include/mpu_armv7.h
+53f9e848af62ea8704f463992e4d65c7c79fc72cfd8fab6fa14adc73478b0afd  Drivers/CMSIS/Include/mpu_armv8.h
+45565c8cb04c653aabaf3cceddfc848b6a0de28c20d4f7e3d475a992c7eee788  Drivers/CMSIS/Include/tz_context.h
+7fff96faed90c81364225132389b1865f67ceac8e65381b60459264c4136ee6e  Drivers/STM32H7xx_HAL_Driver/Inc/Legacy/stm32_hal_legacy.h
+97aeb9e9e0c3acde0c91d025e89c7972b9ad13ab3cb735d40ad852dc395f6980  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal.h
+7a67f8a941d0d6e1803a2d59e3f4134c1e863f62142a2ff42b35a1761b1b42b0  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_adc.h
+5f54fbf0716a5aabe1fab44acaa65553bbc96538038bdb629e7a203cffad6332  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_adc_ex.h
+8b61853cb8eb65dabf5181e9f4a2effb3be70974800f6ddc38ae62f0310e78ae  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_cortex.h
+f7e6ad2cff1b770393ad76961fbb220bef0a52593e9035746e7961137061ebfc  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_def.h
+564d6d26015155743f4990a354d26124d5d434673813c75df5da9572e4ac2eae  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_dma.h
+bc906d5cf9ed149185aa77a80a793e50aa4b2c7e0606f88df1a4b8900a8a26fa  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_dma_ex.h
+24a13bdf1e9010068e8bb123c28421f4e009c86ab949ca5df86a7065a96f0498  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_exti.h
+a50c2a825716267483c905d8689bf387f8314f37e56999dee05ea7b77f3d02c4  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_fdcan.h
+96340bb9572f6c53554323795b3aa8c86962d14b0596dab550322f34dfccba7c  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_flash.h
+a5634068e887b72f39c9f18816d5ca4534b1c0103c9847db5067dd866fa42ba6  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_flash_ex.h
+75c7e634ec0b5fa2ad6ef90b9b010a4dbac1cdd9876daf80cab2253774c092bb  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_gpio.h
+81b441ab0ef72718230fc3b259a120c57e253018863d9aa9e50f4f6456c866f3  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_gpio_ex.h
+9375fc3023cde3f3ccf0a77a21d571d63acbe47f23149c2f226972cecdffdc6f  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_hsem.h
+6741b4870c9e870e3293996b968419b7edbd2c3477183e44663086ec6f069398  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_i2c.h
+445dcca6512f91fa60903605c52f19c2792e3d00e6eba9db3a234901a9dd8c40  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_i2c_ex.h
+580b7f7d97482fe435f5c3c4086f017a090ba186201db2af7c68567094e868e8  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_mdma.h
+65a883328691a724d5163403e5e7db38d5a1e8ec11f7bdcf5620329bf779cdfa  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_pwr.h
+76ec9d62421667db5a499309f50c8145d086d76b5529a7ece37331fe5de05842  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_pwr_ex.h
+27c198869e9a02d059427189d0897130172c10d64a8c993cb57ee9231ebd44cf  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_rcc.h
+cbebc9c87db8acada7da2fd06994a998528d447960ec62737fd65cace4fd34bf  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_rcc_ex.h
+9ea983fd0e3148a3291b2aa56b1d01709374a3a3845d6b592b3d3356b71f6cb5  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_spi.h
+44d854991d118840677da5ce86d88b1e555fe811808354522ad2f198ac4fa66c  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_spi_ex.h
+90eaea9d79e3e69afa3d1ef8758a07ef8809eab28e6502e46d15201f8ffa7c38  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_tim.h
+c6e76b135cc6bff07ad4b84a76d7eedb3a63ddba472131595c4655ac37ed7196  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_tim_ex.h
+4065a1e1b21da22b6ee74e6549d573ea4c0930e744ce923a776cfc3f35383bd7  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_uart.h
+99756f731f50013b1344f8ea0d1a0259ccacd5e085fb7477080c215dcf343841  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_uart_ex.h
+cb252eef4c35038adc1ed634b7acdb7067e4984ef7f399eb6432916756481920  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_adc.h
+0eb42ffbba51192ec0efd6463759a5fda060637ff4d694274df16b4763c882a5  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_bus.h
+e6781bfcc812a315006a5ea9ed0f0eb7db19beb095bce5136c345e0af4caed1c  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_cortex.h
+cb7133e48358f5cd50119c8b88c4a59634dad521f489448e04602c9efd9d2972  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_crs.h
+3cf0adf0da04435eb89743523a7f9e6a23a18fd6133afed7c808acef9ee0aa76  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_dma.h
+74cdd7b811aa394274ba645d05ae410d417f0e3836d91194e58156960d68a2ea  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_dmamux.h
+6eee9e7ba6b688c5c848e8f318b7adc293347a4697a888cfaadc9a2cd654cc5b  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_exti.h
+3a84cb663d59954ce2a057ee58793890579b4ef15af37c8f043190b0a82c9093  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_gpio.h
+7e2cc95c8dcd6b326801026d0398a46b903c94e4c3befd650a227e9a351606c2  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_hsem.h
+272862ad6036ead74e88306b08ed0870c44f866617328beabb505038be9af6ba  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_lpuart.h
+fd20ad8efbceb8ad7169e92a365385759fc1331157a94399d9e8328e32c8a564  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_pwr.h
+811ac8f472d426f2d7542d1e5987f1771035637bbdf69d9197f02cd52bb9f2e9  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_rcc.h
+637d0822e248429fd87182786f1e727860dc52645440405642e08f5df13bf565  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_spi.h
+b8fa6b6b051d961eea8b74d62b1f70849ab029b112d99c3d4955400392d78462  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_system.h
+c4547de1d0e4825dc91d40bd4e9af5cc4d5eff16357c1601fc9127c8aea3f7c3  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_tim.h
+137553753bb69d630d93751f895b3951be03c7a30862a31ac60e94355ce81bde  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_usart.h
+02f36cc8124209b5045c10a4063a7e5f4f92fb1eeb1d29f1104d94cffcbde2a5  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_utils.h
+3e46894e1870c682b6362c0536d5a5ded6cf5541f54559e5cc591e90352f0bfc  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal.c
+f816ffa452a24e62b8c3cf681f5658bbf1a383327022fbeb7faf5c7815a9f85c  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_adc.c
+d6e09ac1293ae3d20806fa04b9abd162144c6b6fc57c4e8d87c11b97c71ba0b6  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_adc_ex.c
+9df95c02feab163763ac752c17c07f0a10f6bd7d303f659e950dd8b6b4cce2c9  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_cortex.c
+e1b72f89360c46185e557e9ae3ad9c0b36978130dbf010ac54a089a850a9d2cf  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_dma.c
+a8bc1642a339acba8aaa7be9101854ab36319efcf2a3ba299760451af31585d1  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_dma_ex.c
+90865afce1c097a4760b197f1c23f602edab2cfd75f19c1d56a14f02e5042411  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_exti.c
+beb1ee442655f607984b1df1bed4caf99dc50a00ea0670c72c917b65aa1657ee  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_fdcan.c
+f5d7fae3a1dce51e81c099a48a39c2076ee79932a7d369a76a2dd1d5b0e8103f  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_flash.c
+aea2f7cf88a97ff6e9eb6afd542ee9aa1f1be2946db834625df176f2a383497f  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_flash_ex.c
+e8cb800d746479f9b768e6845dfd2c84867a0b264101afb21f5ad799e3a65ae2  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_gpio.c
+9878195481869a883edb4c2c4e5f62b7f5764ffbb517bd38a2fae4e2150f8eb0  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_hsem.c
+c627ab3ee0f7d2989ffaa9e078ebda279b8be1b16a98362b51e804e63c8346e4  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_i2c.c
+a6c182468b914f37b8f74e2d3ba0f8d4d6cbf59efe3bf99d9739007a1d7f37d5  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_i2c_ex.c
+674d7a273d208509e2941cb88d9419f549cbdfd35d4aa81b2da135bf1c1a30ad  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_mdma.c
+87dc25ff1b0a58773eeed5a87de133167cfe4306bf54aa884889a61d8a5bd7f4  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_pwr.c
+15469705b458ee696d3ca241ea85ec371c2463a5ac629ab9078d2912dab19c8c  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_pwr_ex.c
+99c51eaf3e01a9040e3080b2d0f537fd546e63792b571f74fc39bdc481d82116  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_rcc.c
+ba3ffa42989a60a93e8de7f148cde4fa22c6853223d00d5d9954ad370c6012fe  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_rcc_ex.c
+862a531faa657484a7af61412387f146587e4430cbfdcf104749f48683ab419c  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_spi.c
+d7262bb17d9c4949ff4be52cb287ab823415ea59019ed89a4750d6c5c1997988  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_spi_ex.c
+a629504942e13c443324ebf9efa301a003ce2880c57b7aeb59bff5a643ec829f  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_tim.c
+f00d3730972ebc50ced69c9c40bfb2d5e2bbc2026e33818bc97cf2048dc47837  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_tim_ex.c
+24be6acbe1eaad088184086efb3a4ce309e00e90ceeeecbf3e112b8ec23bb429  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_uart.c
+ef3ee8fb9ea24163b9ed0b0e6078bba36b071de3ff9af16a7914df634e0bb191  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_uart_ex.c
+a19ff08c49357fc674446e68ebbd806d3925bfeaed294d845b33db9ee060d1bc  FOC_T.ioc
+552e18f5b8d1bb4c377ba082832399d4a6d7fe2b8883b42c5d278d298032fc4f  MDK-ARM/FOC_T.uvprojx
+9a5b62d6c18f215871f7dd5aad6539d49e749447e6f7ff3a525ce1cf6acccc3c  MDK-ARM/RTE/_FOC_T/RTE_Components.h
+2ffde74ddce81f15079360cf0e74585aaddd1c935a4cbcd4cd792242aefb0c3d  MDK-ARM/RTE/_FOC_T_CommandBench/RTE_Components.h
+8aa7753b0613b1e400425cb3b4fb5a0d3a4c57f487831ac4f54fd39a91b11bf9  MDK-ARM/startup_stm32h750xx.s
+f383e9c853ee3b4d47f54990f61ae507c6d90a5f1b2eb74aa8392042d6efec1f  Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os.h
+405bde449889d672725bd3ad3908bb9f54e823b168bf437c6afe360246ba0947  Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.c
+b1670376fa97bba8d55e144b602970f535aa41e276a2e1b3e87ecd906045caf8  Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.h
+ee814ffa60a09e0d114f7f0b1a2a46dc299f8ce5ce1800e909417e71bfe7af08  Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/freertos_mpool.h
+c4f3afb4bc759c43a2b9e5a6a236acca4b1f7301585f02809ae98bec2b15cc93  Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/freertos_os2.h
+dd390a8f432d7a7ba4ca9ad7a37ef3a549fb1c621a3f8d09f8ee30e48a759627  Middlewares/Third_Party/FreeRTOS/Source/croutine.c
+54f696c16294199f4445d042d907b14da401fbb7f3bc3b2ca71acd5dbb120218  Middlewares/Third_Party/FreeRTOS/Source/event_groups.c
+343ced16833df1aad70972829631136d18727bd687fce6f08264162fc9bf221c  Middlewares/Third_Party/FreeRTOS/Source/include/atomic.h
+ecbc64327844a7f24255314d65c4205d3490e8ace8b5d655c1c9f45725b2d7d6  Middlewares/Third_Party/FreeRTOS/Source/include/croutine.h
+dcfd3ab2633029c04037ef35a854db090995fcf938ca33b51199377c36720d47  Middlewares/Third_Party/FreeRTOS/Source/include/deprecated_definitions.h
+b97b6b2d7aa918e62434083f76dca08ae73c85fedd021ecc91af1f39838324f7  Middlewares/Third_Party/FreeRTOS/Source/include/event_groups.h
+74c201409e1156806627c233a27adb1f4da62d9e40baae99db5c7ddc7e9aae2f  Middlewares/Third_Party/FreeRTOS/Source/include/FreeRTOS.h
+973915ae18a63c6783fe09bf589798cbccf3baee7dfa4b14f8d1525607af3ab6  Middlewares/Third_Party/FreeRTOS/Source/include/list.h
+07c912a59ba6af0b6f619f23cc7b58f445596d5ff7f589e9fc564cebbf2530bf  Middlewares/Third_Party/FreeRTOS/Source/include/message_buffer.h
+94ca481a3cb128b2caf847dc570cc82942ee6ffb06710eff09fb0bcbef173848  Middlewares/Third_Party/FreeRTOS/Source/include/mpu_prototypes.h
+5a02b1083a49d9dadd65ac52cd6f21283f24586c939f68c75ce632f60863fd3f  Middlewares/Third_Party/FreeRTOS/Source/include/mpu_wrappers.h
+e3921faf76c89c5bcf068b41b5b806655a0841b68114f9496a56e3a25a5fd84e  Middlewares/Third_Party/FreeRTOS/Source/include/portable.h
+f646ef12236991a3b34c170c65aa12d2d0c0310b28e324ace620e1957b7c109e  Middlewares/Third_Party/FreeRTOS/Source/include/projdefs.h
+c4372fb6b9cd6fb08121c1ac21153bdf3621f92edf2a8381cc631fcef2964fae  Middlewares/Third_Party/FreeRTOS/Source/include/queue.h
+6d4179c295ec9aadb186744e7618854c5ef10cb9a0f8c27948b343a3f6a129af  Middlewares/Third_Party/FreeRTOS/Source/include/semphr.h
+54ff69e8652c7f1332d1679594d1b2076a1633955d6d46e51b3ab4f99780f6ee  Middlewares/Third_Party/FreeRTOS/Source/include/stack_macros.h
+4fe5345c6e09102910b765e0facc05ac12f42ed75eb627767aee59fa5b0df65f  Middlewares/Third_Party/FreeRTOS/Source/include/StackMacros.h
+13f288307ce0b9182941cecfc261b8281fe0fb0e9156f621c252f96f9de8de07  Middlewares/Third_Party/FreeRTOS/Source/include/stream_buffer.h
+1d75dff80cdc81720b60eeb4cb825370bd05508feed244d2ee1cf263be51ffd9  Middlewares/Third_Party/FreeRTOS/Source/include/task.h
+bd94103aef9d4dbf18db3296b5c55be524d229bae90aecb01e2b9475b8f02f55  Middlewares/Third_Party/FreeRTOS/Source/include/timers.h
+2c7593ec5c67bcdb371d5c3fda60f240e594dd3a7b60f72947f53e8c01971e24  Middlewares/Third_Party/FreeRTOS/Source/list.c
+d91f47f6338a4501835989582ae87fd344b6d92b37b5853fa32fd2fffbfaee59  Middlewares/Third_Party/FreeRTOS/Source/portable/MemMang/heap_4.c
+b2e7d040120b0a03801f159d178923a06c74fc64b783a1e5dba50c18cdece746  Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F/port.c
+f529e4dbf67bf5f08de4bf216cda7669f0e89a3c3facbc49f971d25c9656c61c  Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F/portmacro.h
+4613e2dd8c099ee689ff4fabc1d4979c0c22683a95f3e85283c6ef1b92a32bd8  Middlewares/Third_Party/FreeRTOS/Source/queue.c
+20e1a58018635a746b5193073f09a3736464bc913f4ebfe28c39bbb75b4cac6b  Middlewares/Third_Party/FreeRTOS/Source/stream_buffer.c
+6f540b927668e4c87a064749c03f6ee0ca7370b9dfae7d9d5e96ebd0fdf12b8d  Middlewares/Third_Party/FreeRTOS/Source/tasks.c
+87be4c74af661ade4ad39f420888c655067d11df008e7a66c88658f7131cb7f4  Middlewares/Third_Party/FreeRTOS/Source/timers.c
+
+--- HOST INPUT SHA256 (26) ---
+505cb6e446df24e74b251b04b167ce5f4084a874b15baf202d79f8b5d8e2c3ac  tests/axis_command_bench_host.c
+e2a55a714fa3d8f17e2935cc0f30fb7380317d9cc257d7b13a35c3a5ce8a6a34  tests/axis_command_host_tests.c
+ae6134c7790d38765f934c69f0cb8e7646c88e82a3376d81056a41169b17c6c5  tests/axis_command_port_host.c
+0c5a722adde2054024fdbd936d87b9b006440ca653ca05b5a8b81d26f20b12df  tests/axis_status_compile_checks.c
+3583b0e72f6af8ad645b0d6d22b3cd7a77f73896d80f2b06d0f0a75c4c1e943e  tests/can_link_protocol_host.c
+eae5cb40b9bf3a696950512b94d4332a9f3e0e3e7040a0b0ac260d089d858260  tests/can_link_service_host.c
+c020fba5617647e7153cbacbd2582d9ccbc277a490547eb458a3cf9f60a45193  tests/can_link_stubs/board_config.h
+5b032f362b129f6a5134d76a3f818c52e95bf68ba2547b338a3eaa85d499d7b7  tests/can_link_stubs/fdcan.h
+d8426aaa3570e3a60f5e313eaea4404849e5a43f2b82fd955f135d29bbfd7ff6  tests/host_safety/main.h
+27bc9f75cb21e220773c1c7ac92fc76674a61b02b6e6589df6b587dea6036d72  tests/host_stubs/main.h
+ffcfe3a2238b67e844910124e95c3141e427c587cc9988462e36e5ee7451f855  tests/host_stubs/tim.h
+7cced1e9c1ef8c61188f556eb4ab9a46a220b21a55cfde3d708f84dc46c5e124  tests/open_foc_command_host.c
+285138c2230e8ae6f372ead964b7d83eb4c5dd798b3ce3e3ca6300a8bd0ff2d2  tests/port_stubs/board_safety.h
+697a46385429961582728fe912442d3d4825df64f703a6292d1c33bd56cedc57  tests/port_stubs/cmsis_os.h
+84b4b9cfba6f6fd354801b54f7b3327cb15704fb96cf62b28919bd55c02747a5  tests/port_stubs/main.h
+1533a89a2e29ed875c8d069f11442b6b3509dbc104e2ca7500760b183af13c8b  tests/rtos_policy_compile_checks.c
+49dab1085fa0145ee048f6f6a96b71512bb179148c1b95a19b85f9839a5d53d0  tests/run-can-host.ps1
+ee27e9116aa156220a0652776ed56f8f309b57d6e4570d2fe54aa0353ede7cc1  tests/run-can-service-host.ps1
+50acbc1a12e3f72d8629cd7707a60420a4e5bbf5d17f75e16414620e0e8b852e  tests/run-command-host.ps1
+5501f599bac3b15b469213a0b30f1840df08d2a441ae7e981f0d3c4a1b8124bb  tests/run_command_bench_host.py
+21d2b38baaecacba2a88798378462d20235b074fa674d30c7b889c514eca59ef  tests/run_idle_hook_host.py
+405fb40ac8e08f5c73dfd2a9edd73472eafc35b10cdd7fc6c311a6674b755f60  tests/run_telemetry_format_host.py
+13e344b96e6b77155a9c848fc0089f59c4541ed03fd0e6be3ca9645151998e20  tests/safety_config_probe.c
+64470721916f96e7c8663be01b15236ba21d749e3af23c6fb3fc3e58312a7352  tests/safety_profile_host.c
+2255dc4f6a90050c4543dd37cd1c6b9d1e67abf8f349a12a9309e57489d8399a  tests/test_idle_hook_host.c
+e01f121b11368bedd0e8b7730b4ee7e922e07d33c1b23682e6ac8f5f76fd3073  tests/test_telemetry_format.c
+
+--- ARTIFACT SHA256 ---
+88d5eb9c3c58f0e3081ca1316bb5fabd40e91e293c4078a82f42f8646f0776f5  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.axf
+c2537233d1ad3a88b9c7d125ee8621def63333d08bb32af2a9dee7b3d3959b21  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.hex
+b5a1f02193420db4cbe2f907d8a46fd0e0b7c2e4789f2e94d65f95d7d669bc1e  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.map
+82085b035713a43f8368d470e4a3ad18bb66c539b2864d739443fb950e89297b  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.htm
+479b92b37e2c5aa454f3a26c85f128a714fcb6f70852b1933915c3b0b95fff20  MDK-ARM/FOC_T/FOC_T.axf
+861296d7a904f0afeba89096e5fbc963d109a68d77144b4120af8f48edba9137  MDK-ARM/FOC_T/FOC_T.hex
+6813794a7439cbc6f1a3e3172b2642ee814d88713954703f4c9122948bc79e46  MDK-ARM/FOC_T/FOC_T.map
+bdaf93eb636b2ba838712f9dd4b35624895f18d4b078caf9d6f3d23460ce6e6f  MDK-ARM/FOC_T/FOC_T.htm
+========== END 008.02 STOP / HW STILL NOT_RUN ==========
+
+========== 008.02 HW FEEDBACK APPEND / 2026-11-17 Asia/Shanghai ==========
+User statement: 没问题watch也是跟你显示的一样这里测试没问题下一步
+Screenshot preserved byte-for-byte: docs/validation/008-can-stop-20261117.png
+Screenshot source: C:/Users/LEGION/AppData/Local/Temp/codex-clipboard-31dcd9a0-7653-40e6-bdbf-36c902812f71.png
+Screenshot SHA256: 1da6342e7c24db80a0f895b73542d67783a4cdf9736f0959db526186633d8e02
+Visible RX: standard 0x322, DLC8, 41 01 10 02 01 00 00 00, Count109, Cycle12712.0.
+Visible TX STOP: 0x321, DLC8, 43 01 10 00 01 00 00 00, Manual, Count8.
+Visible BUILD request: 51 01 04 01 00 00 00 00, Manual Count2; BUILD reply not visible.
+PING periodic checkbox is unchecked. Same reply ID aggregates historical and different request types.
+Interpretation: protocol v1 STOP result=PROCESSED (02), request_id=1.
+User-reported Watch follows prior instructions: axis_command_stop_applied reaches1 and does not increase on same-ID retry; board_output_enabled0; app_task_deadline_misses0. No separate Watch screenshot.
+HW PASS LIMITED for request1 processed/reread plus user-reported three observations.
+First ACCEPTED01 and BUILD numeric replies are not captured. Request2 progression remains UNKNOWN/not yet reported.
+Do not infer precise test duration, stop latency, zero loss, full-load stability or physical output from this screenshot/Count.
+Continue current Run (no reset/download) for request2 twice: 43 01 10 00 02 00 00 00.
+Expected replies: 41 01 10 01 02 00 00 00 then 41 01 10 02 02 00 00 00.
+With current ticket1, new accepted request processes to ticket2; duplicate stays2. Other two Watch remain0.
+If reset happened, ticket restarts; evaluate one increment for a new accepted ID, none for duplicate, not equality of ticket and arbitrary request_id.
+Source binding: Xiao_ODrive / 488d481 + existing uncommitted 008.02 changes; all187 production input hashes match saved STOP manifest.
+Current HEX SHA256 c2537233d1ad3a88b9c7d125ee8621def63333d08bb32af2a9dee7b3d3959b21 matches saved STOP build.
+Saved AXF SHA256 88d5eb9c3c58f0e3081ca1316bb5fabd40e91e293c4078a82f42f8646f0776f5
+Current AXF SHA256 5a749144634b8ad34024bc1cd1ad598ff11d4b7d413dc137ef78efd8d25eb531
+AXF container hash differs; reason not investigated. This is not proof of changed runtime behavior, given unchanged tracked build inputs and identical HEX; no board image hash readback was provided.
+This append changes documentation/evidence only. No firmware edits, rebuild, Git stage/commit or hardware actions.
+Earlier HW NOT_RUN statements are historical pre-feedback records, superseded only for the limited observations above.
+========== END 008.02 HW FEEDBACK APPEND ==========
+
+========== 008.02 HW CLOSEOUT APPEND / 2026-11-17 Asia/Shanghai ==========
+User statement after the request2 follow-up: 可以没问题显示正常
+Context: asked to send 43 01 10 00 02 00 00 00 twice, ~1 second apart;
+expected request2 ACCEPTED01 then PROCESSED02, new stop increments internal ticket once,
+duplicate does not increment again; output remains0 and app_task_deadline_misses remains0.
+Record as user-reported normal results for this procedure. No new screenshot or raw trace.
+Do not invent exact ticket value/reset history; ticket restarts after reset and need not equal request_id.
+Result: normal low-rate disabled-output STOP checkpoint HW PASS LIMITED, ready for user Git commit.
+Evidence: prior request1 PROCESSED02 screenshot + user Watch report + current request2/duplicate follow-up.
+Not established: physical standstill or EN/MOE measurements, exact end-to-end latency,
+worst critical-section/IRQ/task stack, full bus load, hardware error/replay injection, board image hash readback.
+First-stage BUILD numeric response remains not independently captured; original AXF hash variation remains noted above.
+No firmware change, rebuild, new files, Git stage/commit, download or hardware action in this closeout.
+187 saved production-input hashes rechecked unchanged.
+Earlier request2 UNKNOWN statements are historical and superseded only by this user-reported result.
+Next: user commits STOP checkpoint, then define complete speed/Iq command transaction/session/timeout contract under disabled-output Bench.
+========== END 008.02 HW CLOSEOUT APPEND ==========

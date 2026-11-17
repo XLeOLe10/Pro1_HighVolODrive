@@ -1,7 +1,8 @@
 /* Tests compile the real service and protocol; no product test hooks.
  * Each scenario is a fresh process, preserving one-shot initialization.
  * Register writes and HAL behavior are deterministic mocks, not silicon timing.
- * No Axis/PWM/BoardSafety symbols are supplied: new control dependencies fail link.
+ * STOP scenarios additionally link the real pure command core through callbacks.
+ * No PWM/BoardSafety/port symbols are supplied: direct hardware control fails link.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,6 +10,7 @@
 #include "fdcan.h"
 #include "can_link.h"
 #include "can_link_protocol.h"
+#include "axis_command_core.h"
 
 FDCAN_GlobalTypeDef host_can_registers;
 uint32_t host_message_ram[161];
@@ -27,11 +29,29 @@ static FDCAN_TxHeaderTypeDef sent_header;
 static uint8_t sent_data[8];
 static unsigned status_reads, ignored_status_reads;
 static CanLinkReadStatus observed_status;
+static unsigned stop_calls, ignored_stop_calls;
+static uint32_t stop_success=1U, stop_ticket=41U;
+static unsigned use_core;
+static AxisCommandCore real_core;
+static uint32_t RequestStop(uint32_t *ticket)
+{
+    CHECK(ticket!=NULL);
+    ++stop_calls;
+    if(use_core) return AxisCommand_RequestStop(&real_core,ticket)==AXIS_CMD_OK ? 1U : 0U;
+    *ticket=stop_ticket;
+    return stop_success;
+}
+static uint32_t IgnoredStop(uint32_t *ticket)
+{
+    (void)ticket; ++ignored_stop_calls;
+    return 0U;
+}
 static void ReadStatus(CanLinkReadStatus *out)
 {
     CHECK(out != NULL);
     ++status_reads;
     *out = observed_status;
+    if(use_core) out->stop_applied_ticket=real_core.stop_applied_ticket;
 }
 static void IgnoredStatus(CanLinkReadStatus *out)
 {
@@ -139,10 +159,10 @@ static void Setup(void)
 }
 static void Ready(void)
 {
-    CanLink_Init(ReadStatus);
+    CanLink_Init(ReadStatus,RequestStop);
     CHECK(can_link_diag.state == 1U && can_link_error_count == 0U);
     CHECK(config_calls == 1U && global_calls == 1U && blocking_calls == 1U && start_calls == 1U);
-    CanLink_Init(IgnoredStatus);
+    CanLink_Init(IgnoredStatus,IgnoredStop);
     CHECK(config_calls == 1U && start_calls == 1U);
 }
 static void Queue(uint32_t dlc, uint32_t index, uint32_t count)
@@ -268,7 +288,7 @@ static void Latched(int busoff, int register_only)
     CHECK(can_link_diag.error_flags == (busoff ? CAN_LINK_ERROR_BUS_OFF : CAN_LINK_ERROR_RAM));
     CHECK(can_link_error_count == 1U && receive_calls == 0U && send_calls == 0U);
     host_can_registers.PSR = 0U; host_can_registers.IR = 0U;
-    CanLink_Init(ReadStatus); CanLink_Poll();
+    CanLink_Init(ReadStatus,RequestStop); CanLink_Poll();
     CHECK(can_link_diag.state == (busoff ? 3U : 2U));
     CHECK(start_calls == 1U && receive_calls == 0U && send_calls == 0U);
 }
@@ -292,22 +312,22 @@ static void BadConfig(unsigned field)
     case 5: host_can_registers.ILE = 1U; break;
     default: hfdcan1.Instance = NULL; break;
     }
-    CanLink_Init(ReadStatus);
+    CanLink_Init(ReadStatus,RequestStop);
     CHECK(can_link_diag.state == 2U && can_link_diag.error_flags == CAN_LINK_ERROR_CONFIG);
     CHECK(can_link_error_count == 1U && config_calls == 0U && start_calls == 0U);
-    CanLink_Init(ReadStatus); CanLink_Poll();
+    CanLink_Init(ReadStatus,RequestStop); CanLink_Poll();
     CHECK(can_link_error_count == 1U && receive_calls == 0U && start_calls == 0U);
 }
 static void InitFailure(unsigned step)
 {
     fail_init_at = step;
-    CanLink_Init(ReadStatus);
+    CanLink_Init(ReadStatus,RequestStop);
     CHECK(can_link_diag.state == 2U && can_link_diag.error_flags == CAN_LINK_ERROR_INIT);
     CHECK(can_link_error_count == 1U);
     CHECK(config_calls == 1U && global_calls == (step >= 2U));
     CHECK(blocking_calls == (step >= 3U) && start_calls == (step >= 4U));
     fail_init_at = 0U;
-    CanLink_Init(ReadStatus); CanLink_Poll();
+    CanLink_Init(ReadStatus,RequestStop); CanLink_Poll();
     CHECK(config_calls == 1U && receive_calls == 0U && can_link_diag.state == 2U);
 }
 
@@ -322,10 +342,10 @@ static void QueueQuery(uint8_t opcode, uint8_t token)
 static void QueryValid(void)
 {
     static const uint8_t expected[][8]={
-        {0x52U,0x01U,0x01U,0xA5U,0x1FU,0U,0x01U,0U},
+        {0x52U,0x01U,0x01U,0xA5U,0x3FU,0U,0x01U,0U},
         {0x52U,0x01U,0x02U,0xA6U,0x05U,0x19U,0xCDU,0xABU},
         {0x52U,0x01U,0x03U,0xA7U,0xEFU,0xBEU,0xADU,0xDEU},
-        {0x52U,0x01U,0x04U,0xA8U,0x01U,0x08U,0U,0U}
+        {0x52U,0x01U,0x04U,0xA8U,0x02U,0x08U,0U,0U}
     };
     static const unsigned reads[]={0U,1U,2U,2U};
     CanLinkReadStatus before;
@@ -458,14 +478,226 @@ static void QueryBusOff(void)
 }
 static void NoProvider(void)
 {
-    CanLink_Init(NULL);
+    CanLink_Init(NULL,RequestStop);
     CHECK(can_link_diag.state==2U);
     CHECK(can_link_error_count==1U && can_link_diag.error_flags==CAN_LINK_ERROR_CONFIG);
     CHECK(config_calls==0U && start_calls==0U);
-    CanLink_Init(ReadStatus);
+    CanLink_Init(ReadStatus,RequestStop);
     QueueQuery(2U,0U); CanLink_Poll();
     CHECK(can_link_error_count==1U && can_link_diag.state==2U);
     CHECK(receive_calls==0U && send_calls==0U && status_reads==0U);
+}
+
+
+static void QueueStop(uint32_t id)
+{
+    unsigned i;
+    Queue(8U,0U,1U);
+    incoming_data[0]=0x43U; incoming_data[1]=1U;
+    incoming_data[2]=0x10U; incoming_data[3]=0U;
+    for(i=0U;i<4U;++i) incoming_data[i+4U]=(uint8_t)(id>>(8U*i));
+}
+static void ExpectStop(uint32_t id,uint8_t status)
+{
+    uint8_t expected[8]={0x41U,1U,0x10U,0U,0U,0U,0U,0U};
+    unsigned i;
+    expected[3]=status;
+    for(i=0U;i<4U;++i) expected[i+4U]=(uint8_t)(id>>(8U*i));
+    CHECK(memcmp(sent_data,expected,8U)==0);
+}
+static void StopValid(void)
+{
+    Ready();
+    QueueStop(0x12345678U); fifo_fill=8U;
+    CanLink_Poll();
+    ExpectStop(0x12345678U,1U);
+    CHECK(stop_calls==1U && receive_calls==1U && send_calls==1U && fifo_fill==7U);
+    CHECK(can_link_rx_count==0U && can_query_rx_count==0U);
+    /* Complete copy is not sufficient: only equality to THIS ticket is proof. */
+    observed_status.stop_applied_ticket=40U;
+    QueueStop(0x12345678U); CanLink_Poll(); ExpectStop(0x12345678U,1U);
+    observed_status.stop_applied_ticket=42U;
+    QueueStop(0x12345678U); CanLink_Poll(); ExpectStop(0x12345678U,1U);
+    CHECK(stop_calls==1U);
+    observed_status.stop_applied_ticket=41U;
+    QueueStop(0x12345678U); CanLink_Poll(); ExpectStop(0x12345678U,2U);
+    QueueStop(0x12345678U); CanLink_Poll(); ExpectStop(0x12345678U,2U);
+    CHECK(stop_calls==1U && ignored_stop_calls==0U);
+    CHECK(can_link_error_count==0U && can_link_diag.rejected_count==0U);
+    fifo_fill=0U; CanLink_Poll();
+    CHECK(send_calls==5U && stop_calls==1U);
+}
+static void StopOrdering(void)
+{
+    Ready();
+    QueueStop(10U); CanLink_Poll(); ExpectStop(10U,1U);
+    QueueStop(9U); CanLink_Poll(); ExpectStop(9U,3U);
+    QueueStop(11U); CanLink_Poll(); ExpectStop(11U,4U);
+    CHECK(stop_calls==1U);
+    observed_status.stop_applied_ticket=41U;
+    stop_ticket=42U;
+    QueueStop(11U); CanLink_Poll(); ExpectStop(11U,1U);
+    CHECK(stop_calls==2U);
+    QueueStop(10U); CanLink_Poll(); ExpectStop(10U,3U);
+    QueueStop(11U); CanLink_Poll(); ExpectStop(11U,1U);
+    CHECK(stop_calls==2U); /* New result is not confused with prior completed STOP. */
+    observed_status.stop_applied_ticket=42U;
+    QueueStop(11U); CanLink_Poll(); ExpectStop(11U,2U);
+}
+static void StopRetry(int tx_failure)
+{
+    Ready();
+    if(tx_failure) send_result=HAL_ERROR; else fifo_free=0U;
+    QueueStop(7U); CanLink_Poll();
+    CHECK(stop_calls==1U && can_link_diag.tx_enqueued_count==0U);
+    CHECK(can_link_error_count==1U);
+    CHECK(send_calls==(unsigned)tx_failure);
+    send_result=HAL_OK; fifo_free=32U;
+    fifo_fill=0U; CanLink_Poll();
+    CHECK(send_calls==(unsigned)tx_failure); /* no unsolicited delayed response */
+    QueueStop(7U); CanLink_Poll(); ExpectStop(7U,1U);
+    CHECK(stop_calls==1U);
+    observed_status.stop_applied_ticket=41U;
+    QueueStop(7U); CanLink_Poll(); ExpectStop(7U,2U);
+    CHECK(stop_calls==1U && can_link_diag.tx_enqueued_count==2U);
+}
+static void StopRejected(void)
+{
+    Ready();
+    stop_success=0U;
+    QueueStop(5U); CanLink_Poll(); ExpectStop(5U,5U);
+    CHECK(stop_calls==1U);
+    stop_success=1U; stop_ticket=0U;
+    QueueStop(5U); CanLink_Poll(); ExpectStop(5U,5U);
+    CHECK(stop_calls==2U);
+    stop_ticket=41U;
+    QueueStop(5U); CanLink_Poll(); ExpectStop(5U,1U);
+    observed_status.stop_applied_ticket=41U;
+    stop_success=0U;
+    QueueStop(6U); CanLink_Poll(); ExpectStop(6U,5U);
+    QueueStop(5U); CanLink_Poll(); ExpectStop(5U,2U);
+    CHECK(stop_calls==4U); /* Rejected new request did not evict retained result. */
+    stop_success=1U; stop_ticket=42U;
+    QueueStop(6U); CanLink_Poll(); ExpectStop(6U,1U);
+    CHECK(stop_calls==5U);
+}
+static void StopInvalid(void)
+{
+    unsigned i;
+    Ready();
+    for(i=0U;i<12U;++i) {
+        QueueStop(1U);
+        switch(i) {
+        case 0: incoming_data[0]=0x41U; break;
+        case 1: incoming_data[1]=2U; break;
+        case 2: incoming_data[2]=0x11U; break;
+        case 3: incoming_data[3]=1U; break;
+        case 4: incoming_data[4]=0U; break; /* ID zero */
+        case 5: incoming.Identifier=0x322U; break;
+        case 6: incoming.IdType=1U; break;
+        case 7: incoming.RxFrameType=1U; break;
+        case 8: incoming.FDFormat=1U; break;
+        case 9: incoming.BitRateSwitch=1U; break;
+        case 10: incoming.DataLength=7U; break;
+        default: incoming_data[0]=0x51U; break;
+        }
+        CanLink_Poll();
+        CHECK(stop_calls==0U && status_reads==0U && send_calls==0U);
+        CHECK(can_link_diag.rejected_count==i+1U);
+    }
+}
+static void StopDlc(void)
+{
+    unsigned dlc;
+    Ready();
+    for(dlc=0U;dlc<16U;++dlc) {
+        unsigned r=receive_calls,t=send_calls,s=stop_calls;
+        QueueStop(1U); host_message_ram[2U]=dlc<<16U;
+        CanLink_Poll();
+        if(dlc==8U) {
+            CHECK(receive_calls==r+1U && send_calls==t+1U && stop_calls==s+1U);
+        } else {
+            CHECK(receive_calls==r && send_calls==t && stop_calls==s);
+            CHECK(host_can_registers.RXF0A==0U);
+        }
+    }
+    CHECK(can_link_diag.rejected_count==15U && stop_calls==1U);
+}
+static void StopUnavailable(int busoff)
+{
+    Ready(); QueueStop(1U);
+    if(busoff) host_can_registers.PSR=FDCAN_PSR_BO; else receive_result=HAL_ERROR;
+    CanLink_Poll();
+    CHECK(stop_calls==0U && send_calls==0U && status_reads==0U);
+    CHECK(can_link_error_count==1U && receive_calls==(busoff?0U:1U));
+}
+static void NoStopProvider(void)
+{
+    CanLink_Init(ReadStatus,NULL);
+    CHECK(can_link_diag.state==2U && can_link_diag.error_flags==CAN_LINK_ERROR_CONFIG);
+    CanLink_Init(ReadStatus,RequestStop);
+    QueueStop(1U); CanLink_Poll();
+    CHECK(can_link_error_count==1U && config_calls==0U && stop_calls==0U);
+}
+static void StopMaxId(void)
+{
+    Ready();
+    QueueStop(0xFFFFFFFFU); CanLink_Poll(); ExpectStop(0xFFFFFFFFU,1U);
+    observed_status.stop_applied_ticket=41U;
+    QueueStop(0xFFFFFFFFU); CanLink_Poll(); ExpectStop(0xFFFFFFFFU,2U);
+    QueueStop(1U); CanLink_Poll(); ExpectStop(1U,3U);
+    CHECK(stop_calls==1U); /* Explicitly no request ID wrap within a boot. */
+    QueueStop(0U); CanLink_Poll();
+    CHECK(stop_calls==1U && send_calls==3U && can_link_diag.rejected_count==1U);
+}
+/* Real pure core: synthetic inputs use its public validation/publication APIs.
+ * This verifies logical consumption/cancellation, not IRQ order or EN/MOE. */
+static uint32_t PublishFixture(uint32_t opcode,uint32_t now)
+{
+    AxisCommandFrame f;
+    uint32_t seq=0U;
+    memset(&f,0,sizeof(f));
+    f.run_epoch=real_core.run_epoch; f.opcode=opcode; f.control_mode=AXIS_CMD_SPEED_MODE;
+    f.speed_target_rpm=100.0f; f.iq_limit_a=1.0f;
+    f.received_tick_ms=now; f.expires_tick_ms=now+100U;
+    CHECK(AxisCommand_Validate(&real_core.limits,&f,now)==AXIS_CMD_OK);
+    CHECK(AxisCommand_PublishValidated(&real_core,&f,now,0U,&seq)==AXIS_CMD_OK);
+    CHECK(seq!=0U);
+    return seq;
+}
+static void StopCore(unsigned mode)
+{
+    AxisCommandLimits limits={1U,1000.0f,4.0f,1000U};
+    uint32_t pending_seq=0U,active_seq=0U,epoch;
+    if(mode==2U) limits.confirmed=0U;
+    AxisCommand_Init(&real_core,&limits);
+    use_core=1U;
+    if(mode==0U) {
+        active_seq=PublishFixture(AXIS_CMD_START,1U);
+        AxisCommand_Tick(&real_core,1U,0U,1U);
+        CHECK(real_core.active_valid==1U && real_core.applied_seq==active_seq);
+        pending_seq=PublishFixture(AXIS_CMD_UPDATE,2U);
+    } else if(mode==1U) pending_seq=PublishFixture(AXIS_CMD_START,1U);
+    epoch=real_core.run_epoch;
+    Ready();
+    QueueStop(1U); CanLink_Poll(); ExpectStop(1U,1U);
+    CHECK(real_core.stop_pending==1U && real_core.stop_applied_ticket==0U);
+    CHECK(AxisCommand_NeedsDisarm(&real_core,3U,0U)!=0U);
+    QueueStop(1U); CanLink_Poll(); ExpectStop(1U,1U);
+    CHECK(stop_calls==1U);
+    AxisCommand_Tick(&real_core,3U,mode==3U?0x80U:0U,1U);
+    CHECK(real_core.stop_pending==0U && real_core.stop_applied_ticket==1U);
+    CHECK(real_core.active_valid==0U && real_core.pending_ready==0U);
+    CHECK(real_core.result==AXIS_CMD_STOPPED && real_core.run_epoch>epoch);
+    CHECK(AxisCommand_Permitted(&real_core,3U,mode==3U?0x80U:0U)==0U);
+    if(pending_seq) CHECK(real_core.cancelled_seq==pending_seq);
+    if(mode==3U) CHECK(real_core.fault_latched!=0U);
+    QueueStop(1U); CanLink_Poll(); ExpectStop(1U,2U);
+    epoch=real_core.run_epoch;
+    QueueStop(1U); CanLink_Poll(); ExpectStop(1U,2U);
+    CHECK(stop_calls==1U && real_core.run_epoch==epoch);
+    if(mode==3U) CHECK(real_core.fault_latched!=0U);
+    if(mode==2U) CHECK(real_core.config_valid==0U);
 }
 
 int main(int argc, char **argv)
@@ -493,9 +725,23 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "query-tx-fail")) QueryHalFailure(1);
     else if (!strcmp(argv[1], "query-busoff")) QueryBusOff();
     else if (!strcmp(argv[1], "no-provider")) NoProvider();
+    else if (!strcmp(argv[1], "stop-valid")) StopValid();
+    else if (!strcmp(argv[1], "stop-ordering")) StopOrdering();
+    else if (!strcmp(argv[1], "stop-tx-busy")) StopRetry(0);
+    else if (!strcmp(argv[1], "stop-tx-fail")) StopRetry(1);
+    else if (!strcmp(argv[1], "stop-rejected")) StopRejected();
+    else if (!strcmp(argv[1], "stop-invalid")) StopInvalid();
+    else if (!strcmp(argv[1], "stop-dlc")) StopDlc();
+    else if (!strcmp(argv[1], "stop-busoff")) StopUnavailable(1);
+    else if (!strcmp(argv[1], "stop-rx-fail")) StopUnavailable(0);
+    else if (!strcmp(argv[1], "stop-no-provider")) NoStopProvider();
+    else if (!strcmp(argv[1], "stop-max-id")) StopMaxId();
+    else if (!strncmp(argv[1], "stop-core-",10)) StopCore((unsigned)atoi(argv[1]+10));
     else if (!strncmp(argv[1], "bad-config-", 11)) BadConfig((unsigned)atoi(argv[1] + 11));
     else if (!strncmp(argv[1], "init-fail-", 10)) InitFailure((unsigned)atoi(argv[1] + 10));
     else CHECK(0);
+    if(strncmp(argv[1],"stop-",5)) CHECK(stop_calls==0U);
+    CHECK(ignored_stop_calls==0U);
     printf("CAN service %s: %u assertions PASS\n", argv[1], checks);
     return 0;
 }

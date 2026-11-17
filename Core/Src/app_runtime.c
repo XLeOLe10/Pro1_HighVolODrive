@@ -5,7 +5,6 @@
 #include "axis_command.h"
 #include "board_config.h"
 #if AXIS_COMMAND_BENCH_ENABLE
-#include "axis_command_bench.h"
 #include "can_link.h"
 #endif
 #include "board_safety.h"
@@ -125,7 +124,7 @@ static void RecordCriticalCycles(uint32_t started)
 }
 
 #if AXIS_COMMAND_BENCH_ENABLE
-/* appTask reads diagnostic mirrors only, on STATUS/FAULT queries.
+/* appTask reads diagnostic mirrors on STATUS/FAULT and STOP result rereads.
  * PRIMASK excludes TIM1 IRQ0 while copying. Mirrors can reflect different
  * publication times (e.g. fault before next permit update); never authorize
  * control from this snapshot. Fatal/NMI paths disable outputs and do not return. */
@@ -140,9 +139,19 @@ static void ReadCanStatus(CanLinkReadStatus *snapshot)
     snapshot->configured = axis_command_configured;
     snapshot->permit = axis_command_permit;
     snapshot->output_enabled = board_output_enabled;
+    /* PublishDiagnostics writes this only after the core consumes STOP and
+     * BeginCycle has disabled outputs; a stale read delays, never fakes, ACK. */
+    snapshot->stop_applied_ticket = axis_command_stop_applied;
     __DMB();
     RecordCriticalCycles(started);
     __set_PRIMASK(saved);
+}
+
+/* CAN is the sole Bench command source. The port owns the IRQ-safe STOP
+ * handoff; TIM1 owns disarm/consumption. No output or fault writes here. */
+static uint32_t RequestCanStop(uint32_t *ticket)
+{
+    return (AxisCommandPort_Stop(ticket) == AXIS_CMD_OK) ? 1U : 0U;
 }
 #endif
 
@@ -268,11 +277,10 @@ void AppRuntime_TaskStart(void)
     app_heap_free_bytes = (uint32_t)xPortGetFreeHeapSize();
     app_heap_min_free_bytes = (uint32_t)xPortGetMinimumEverFreeHeapSize();
 #if AXIS_COMMAND_BENCH_ENABLE
-    CanLink_Init(ReadCanStatus); /* startup only; read-only provider, no control API */
+    CanLink_Init(ReadCanStatus, RequestCanStop); /* sole Bench command producer */
 #endif
     CurrentSense_Start();
 #if AXIS_COMMAND_BENCH_ENABLE
-    AxisCommandBench_Init(HAL_GetTick());
     /* TIM1 CH4 is an internal ADC trigger. Directly enable that channel;
      * HAL_TIM_PWM_Start would transiently set the advanced-timer MOE. */
     BoardSafety_DisableOutputs();
@@ -318,10 +326,8 @@ void AppRuntime_BackgroundStep(void)
     }
 #endif
     now = HAL_GetTick();
-#if AXIS_COMMAND_BENCH_ENABLE
-    AxisCommandBench_Step(now, command_bench_ready,
-        BoardSafety_PowerOutputsAreDisabled(), board_fault_mask, foc_isr_overrun_count);
-#endif
+    /* Automatic Bench sequencer is intentionally not scheduled alongside CAN.
+     * Its source remains available to the independent HOST regression suite. */
     if ((uint32_t)(now - last_telemetry_tick) >= APP_TELEMETRY_PERIOD_MS)
     {
         last_telemetry_tick = now;

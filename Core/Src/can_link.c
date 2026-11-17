@@ -17,6 +17,12 @@ volatile uint32_t can_link_error_count;
 volatile CanLinkDiagnostics can_link_diag;
 static uint8_t init_attempted;
 static CanLinkStatusReader status_reader;
+static CanLinkStopRequester stop_requester;
+/* appTask-owned single retained result, no ISR access and no dynamic memory.
+ * Sole producer + nonzero increasing IDs bounds Stop calls to UINT32_MAX,
+ * preventing reuse of a saturated core ticket. Revisit if adding producers. */
+static uint32_t last_stop_request_id;
+static uint32_t last_stop_ticket;
 
 static void LinkError(uint32_t flags)
 {
@@ -24,18 +30,19 @@ static void LinkError(uint32_t flags)
     can_link_diag.error_flags |= flags;
 }
 
-void CanLink_Init(CanLinkStatusReader read_status)
+void CanLink_Init(CanLinkStatusReader read_status, CanLinkStopRequester request_stop)
 {
     FDCAN_FilterTypeDef filter = {0};
     if (init_attempted != 0U) return;
     init_attempted = 1U;
-    if (read_status == 0)
+    if ((read_status == 0) || (request_stop == 0))
     {
         LinkError(CAN_LINK_ERROR_CONFIG);
         can_link_diag.state = 2U;
         return;
     }
     status_reader = read_status;
+    stop_requester = request_stop;
     /* Check generated geometry before directly peeking the FIFO header below.
      * This service assumes sole FDCAN1 use and an 8-byte blocking FIFO. */
     if ((hfdcan1.Instance != FDCAN1) ||
@@ -139,6 +146,29 @@ static uint32_t QueryValue(uint8_t opcode)
            (((snapshot.status_word >> 8U) & 0xFFFFU) << 16U);
 }
 
+/* Returns a historical result for duplicate IDs. A new stop intent must have
+ * a larger ID. PROCESSED is software disarm completion, not measured standstill.
+ * Call BEFORE checking TX space: a lost reply must never prevent a stop. */
+static uint8_t HandleStop(uint32_t request_id)
+{
+    CanLinkReadStatus snapshot;
+    uint32_t ticket = 0U;
+    if (last_stop_request_id != 0U)
+    {
+        if (request_id < last_stop_request_id) return CAN_STOP_STALE;
+        status_reader(&snapshot);
+        if (request_id == last_stop_request_id)
+            return (snapshot.stop_applied_ticket == last_stop_ticket) ?
+                CAN_STOP_PROCESSED : CAN_STOP_ACCEPTED;
+        if (snapshot.stop_applied_ticket != last_stop_ticket) return CAN_STOP_BUSY;
+    }
+    if ((stop_requester(&ticket) == 0U) || (ticket == 0U))
+        return CAN_STOP_REJECTED;
+    last_stop_request_id = request_id;
+    last_stop_ticket = ticket;
+    return CAN_STOP_ACCEPTED;
+}
+
 void CanLink_Poll(void)
 {
     FDCAN_RxHeaderTypeDef rx;
@@ -146,6 +176,7 @@ void CanLink_Poll(void)
     CanLinkFrame request;
     CanLinkFrame reply;
     uint32_t index;
+    uint32_t stop_id;
     uint8_t opcode;
     volatile const uint32_t *element;
     if (can_link_diag.state != 1U) return;
@@ -190,15 +221,22 @@ void CanLink_Poll(void)
     else
     {
         opcode = CanLinkProtocol_QueryOpcode(&request);
-        if (opcode == 0U)
+        if (opcode != 0U)
         {
-            can_link_diag.rejected_count++;
-            return;
+            /* Queries never submit commands, feed a watchdog or clear faults. */
+            (void)CanLinkProtocol_MakeQueryReply(&request, QueryValue(opcode), &reply);
+            can_query_rx_count++;
         }
-        /* request is a stable private copy; formatting cannot fail after the
-         * same validation. No command submission, watchdog feed or fault clear. */
-        (void)CanLinkProtocol_MakeQueryReply(&request, QueryValue(opcode), &reply);
-        can_query_rx_count++;
+        else
+        {
+            stop_id = CanLinkProtocol_StopRequestId(&request);
+            if (stop_id == 0U)
+            {
+                can_link_diag.rejected_count++;
+                return;
+            }
+            (void)CanLinkProtocol_MakeStopReply(&request, HandleStop(stop_id), &reply);
+        }
     }
     if (HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan1) == 0U)
     {

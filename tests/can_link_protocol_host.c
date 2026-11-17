@@ -181,8 +181,8 @@ static void ValidQueries(void)
     uint8_t expected[8] = {0x52U,0x01U,0U,0U,0U,0U,0U,0U};
     CHECK(CAN_QUERY_INFO == 1U && CAN_QUERY_STATUS == 2U);
     CHECK(CAN_QUERY_FAULT == 3U && CAN_QUERY_BUILD == 4U);
-    CHECK(CAN_QUERY_INFO_VALUE == 0x0001001FU);
-    CHECK(CAN_QUERY_BUILD_REVISION == 0x00000801U);
+    CHECK(CAN_QUERY_INFO_VALUE == 0x0001003FU);
+    CHECK(CAN_QUERY_BUILD_REVISION == 0x00000802U);
     for (opcode=1U; opcode<=4U; ++opcode) {
         for (token=0U; token<256U; ++token) {
             request=Query((uint8_t)opcode,(uint8_t)token);
@@ -258,12 +258,95 @@ static void InvalidQueries(void)
     CHECK(memcmp(before,&request,sizeof(request)) == 0);
 }
 
+
+static CanLinkFrame Stop(uint32_t id)
+{
+    CanLinkFrame request = Ping();
+    unsigned i;
+    request.data[0]=0x43U; request.data[1]=1U;
+    request.data[2]=0x10U; request.data[3]=0U;
+    for(i=0U;i<4U;++i) request.data[i+4U]=(uint8_t)(id>>(8U*i));
+    return request;
+}
+static void RejectStop(const CanLinkFrame *request)
+{
+    CanLinkFrame reply;
+    unsigned char before[sizeof(reply)];
+    memset(&reply,0xD3,sizeof(reply)); memcpy(before,&reply,sizeof(reply));
+    CHECK(CanLinkProtocol_StopRequestId(request)==0U);
+    CHECK(CanLinkProtocol_MakeStopReply(request,1U,&reply)==0);
+    CHECK(memcmp(before,&reply,sizeof(reply))==0);
+}
+static void StopFrames(void)
+{
+    static const uint32_t ids[]={1U,0x12345678U,0x80000000U,0xFFFFFFFFU};
+    static const uint8_t id_bytes[][4]={
+        {1U,0U,0U,0U},{0x78U,0x56U,0x34U,0x12U},
+        {0U,0U,0U,0x80U},{0xFFU,0xFFU,0xFFU,0xFFU}};
+    CanLinkFrame request,reply;
+    unsigned i,status,byte,bit;
+    unsigned char before[sizeof(request)];
+    CHECK(CAN_STOP_OPCODE==0x10U && CAN_STOP_ACCEPTED==1U);
+    CHECK(CAN_STOP_PROCESSED==2U && CAN_STOP_STALE==3U);
+    CHECK(CAN_STOP_BUSY==4U && CAN_STOP_REJECTED==5U);
+    for(i=0U;i<sizeof(ids)/sizeof(ids[0]);++i) {
+        for(status=1U;status<=5U;++status) {
+            uint8_t expected[8]={0x41U,1U,0x10U,0U,0U,0U,0U,0U};
+            request=Stop(ids[i]); memcpy(before,&request,sizeof(request));
+            expected[3]=(uint8_t)status; memcpy(expected+4U,id_bytes[i],4U);
+            CHECK(CanLinkProtocol_StopRequestId(&request)==ids[i]);
+            CHECK(CanLinkProtocol_MakeStopReply(&request,(uint8_t)status,&reply)==1);
+            CheckQueryReply(&reply,expected);
+            CHECK(memcmp(before,&request,sizeof(request))==0);
+            ExpectRejected(&request); RejectQuery(&request);
+            CHECK(CanLinkProtocol_MakeStopReply(&request,(uint8_t)status,&request)==1);
+            CheckQueryReply(&request,expected);
+            RejectStop(&request); /* STOP ACK cannot trigger another STOP. */
+        }
+    }
+    for(i=0U;i<256U;++i) {
+        if(i!=8U) { request=Stop(1U); request.length=(uint8_t)i; RejectStop(&request); }
+        if(i<1U || i>5U) {
+            request=Stop(1U); memcpy(before,&request,sizeof(request));
+            CHECK(CanLinkProtocol_MakeStopReply(&request,(uint8_t)i,&request)==0);
+            CHECK(memcmp(before,&request,sizeof(request))==0);
+        }
+    }
+    for(byte=0U;byte<4U;++byte) {
+        for(bit=0U;bit<8U;++bit) {
+            request=Stop(1U); request.data[byte]^=(uint8_t)(1U<<bit); RejectStop(&request);
+        }
+    }
+    for(i=1U;i<256U;++i) {
+        request=Stop(1U); request.extended=(uint8_t)i; RejectStop(&request);
+        request=Stop(1U); request.remote=(uint8_t)i; RejectStop(&request);
+        request=Stop(1U); request.fd=(uint8_t)i; RejectStop(&request);
+        request=Stop(1U); request.brs=(uint8_t)i; RejectStop(&request);
+    }
+    for(i=0U;i<0x800U;++i) {
+        if(i==0x321U) continue;
+        request=Stop(1U); request.id=i; RejectStop(&request);
+    }
+    request=Stop(1U); request.id=0xFFFFFFFFU; RejectStop(&request);
+    request=Stop(0U); RejectStop(&request);
+    memcpy(before,&request,sizeof(request));
+    CHECK(CanLinkProtocol_MakeStopReply(&request,1U,&request)==0);
+    CHECK(memcmp(before,&request,sizeof(request))==0);
+    request=Ping(); RejectStop(&request);
+    request=Query(1U,0U); RejectStop(&request);
+    RejectStop(NULL);
+    request=Stop(1U);
+    CHECK(CanLinkProtocol_MakeStopReply(&request,1U,NULL)==0);
+    CHECK(CanLinkProtocol_MakeStopReply(NULL,1U,NULL)==0);
+}
+
 int main(void)
 {
     ValidFrames();
     RejectedFrames();
     ValidQueries();
     InvalidQueries();
+    StopFrames();
     printf("CAN protocol HOST PASS: %u assertions\n", checks);
     return EXIT_SUCCESS;
 }

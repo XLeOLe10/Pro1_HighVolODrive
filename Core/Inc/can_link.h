@@ -41,12 +41,21 @@ typedef struct {
     uint32_t configured;
     uint32_t permit;
     uint32_t output_enabled;
+    /* Monotonic completion marker, published only AFTER TIM1 handles STOP.
+     * May lag the core; unlike other mirrors, matching a retained ticket is
+     * proof that this boot's STOP was handled, not that the motor is stationary. */
+    uint32_t stop_applied_ticket;
 } CanLinkReadStatus;
 typedef void (*CanLinkStatusReader)(CanLinkReadStatus *snapshot);
+/* appTask only, bounded/nonblocking. Returns 1 with a nonzero ticket only
+ * after the independent STOP channel accepts; otherwise 0. No start/clear. */
+typedef uint32_t (*CanLinkStopRequester)(uint32_t *ticket);
 
 /* Bench-only, one startup call in appTask. No retry/recovery during this test. */
-void CanLink_Init(CanLinkStatusReader read_status);
+void CanLink_Init(CanLinkStatusReader read_status, CanLinkStopRequester request_stop);
 /* After resolver acquisition: <=1 receive, <=1 enqueue, no waits/heap.
- * STATUS/FAULT uses the provider's bounded PRIMASK copy; encoding/HAL outside. */
+ * STATUS/FAULT/STOP-result uses bounded PRIMASK copies, encoding/HAL outside.
+ * Only one control producer per boot. STOP IDs never wrap; the latest accepted
+ * ID/ticket is retained even if TX fails. Reboot clears this history. */
 void CanLink_Poll(void);
 #endif
