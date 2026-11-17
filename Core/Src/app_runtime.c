@@ -6,6 +6,7 @@
 #include "board_config.h"
 #if AXIS_COMMAND_BENCH_ENABLE
 #include "can_link.h"
+#include "can_link_protocol.h"
 #endif
 #include "board_safety.h"
 #include "current_sense.h"
@@ -153,6 +154,18 @@ static uint32_t RequestCanStop(uint32_t *ticket)
 {
     return (AxisCommandPort_Stop(ticket) == AXIS_CMD_OK) ? 1U : 0U;
 }
+
+/* Integer wire units -> common command limits, with no runtime publication.
+ * Passing this precheck does not establish readiness, freshness or permission. */
+static uint8_t CheckCanTargets(int32_t speed_rpm, uint32_t iq_limit_ma)
+{
+    uint32_t result = AxisCommandPort_CheckTargets((float)speed_rpm,
+                                                  (float)iq_limit_ma / 1000.0f);
+    if (result == AXIS_CMD_OK) return CAN_TARGET_CHECK_OK;
+    if (result == AXIS_CMD_INVALID) return CAN_TARGET_CHECK_RANGE;
+    if (result == AXIS_CMD_CONFIG_UNSET) return CAN_TARGET_CHECK_CONFIG;
+    return CAN_TARGET_CHECK_REJECTED;
+}
 #endif
 
 #if (BOARD_POWER_STAGE_MODE != BOARD_POWER_STAGE_DISABLED)
@@ -277,7 +290,8 @@ void AppRuntime_TaskStart(void)
     app_heap_free_bytes = (uint32_t)xPortGetFreeHeapSize();
     app_heap_min_free_bytes = (uint32_t)xPortGetMinimumEverFreeHeapSize();
 #if AXIS_COMMAND_BENCH_ENABLE
-    CanLink_Init(ReadCanStatus, RequestCanStop); /* sole Bench command producer */
+    CanLink_Init(ReadCanStatus, RequestCanStop, CheckCanTargets);
+    /* STOP is still the sole Bench command; pair precheck never publishes. */
 #endif
     CurrentSense_Start();
 #if AXIS_COMMAND_BENCH_ENABLE

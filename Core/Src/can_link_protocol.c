@@ -96,3 +96,41 @@ int CanLinkProtocol_MakeStopReply(const CanLinkFrame *request,
     *reply = result;
     return 1;
 }
+
+int CanLinkProtocol_ReadTargetCheck(const CanLinkFrame *request, CanLinkTargetPair *pair)
+{
+    CanLinkTargetPair decoded;
+    uint32_t speed;
+    if ((request == NULL) || (pair == NULL)) return 0;
+    if ((request->id != CAN_LINK_REQUEST_ID) ||
+        (request->extended != 0U) || (request->remote != 0U) ||
+        (request->fd != 0U) || (request->brs != 0U) ||
+        (request->length != 8U)) return 0;
+    if ((request->data[0] != 0x43U) || (request->data[1] != 0x01U) ||
+        (request->data[2] != CAN_TARGET_CHECK_OPCODE)) return 0;
+    speed = (uint32_t)request->data[4] | ((uint32_t)request->data[5] << 8U);
+    /* Explicit sign extension avoids implementation-defined uint16 -> int16. */
+    decoded.speed_rpm = (speed >= 0x8000U) ? ((int32_t)speed - 65536) : (int32_t)speed;
+    decoded.iq_limit_ma = (uint32_t)request->data[6] | ((uint32_t)request->data[7] << 8U);
+    *pair = decoded;
+    return 1;
+}
+
+int CanLinkProtocol_MakeTargetCheckReply(const CanLinkFrame *request,
+                                        uint8_t result_code, CanLinkFrame *reply)
+{
+    CanLinkFrame result = {0U, 0U, 0U, 0U, 0U, 0U, {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U}};
+    CanLinkTargetPair pair;
+    unsigned int i;
+    if ((reply == NULL) || (result_code < CAN_TARGET_CHECK_OK) ||
+        (result_code > CAN_TARGET_CHECK_REJECTED) ||
+        (CanLinkProtocol_ReadTargetCheck(request, &pair) == 0)) return 0;
+    result.id = CAN_LINK_REPLY_ID;
+    result.length = 8U;
+    result.data[0] = 0x56U;
+    result.data[1] = 0x01U;
+    result.data[2] = result_code;
+    for (i = 3U; i < 8U; ++i) result.data[i] = request->data[i];
+    *reply = result;
+    return 1;
+}

@@ -33,6 +33,26 @@ static unsigned stop_calls, ignored_stop_calls;
 static uint32_t stop_success=1U, stop_ticket=41U;
 static unsigned use_core;
 static AxisCommandCore real_core;
+static unsigned target_calls,ignored_target_calls,target_use_limits;
+static int32_t checked_speed;
+static uint32_t checked_iq;
+static uint8_t target_result=1U;
+static AxisCommandLimits target_limits={1U,1000.0f,4.0f,1000U};
+static uint8_t CheckTargets(int32_t rpm,uint32_t iq_ma)
+{
+    uint32_t result;
+    ++target_calls; checked_speed=rpm; checked_iq=iq_ma;
+    if(!target_use_limits)return target_result;
+    result=AxisCommand_ValidateTargets(&target_limits,(float)rpm,(float)iq_ma/1000.0f);
+    if(result==AXIS_CMD_OK)return 1U;
+    if(result==AXIS_CMD_CONFIG_UNSET)return 3U;
+    if(result==AXIS_CMD_INVALID)return 2U;
+    return 4U;
+}
+static uint8_t IgnoredTargets(int32_t rpm,uint32_t iq_ma)
+{
+    (void)rpm;(void)iq_ma;++ignored_target_calls;return 4U;
+}
 static uint32_t RequestStop(uint32_t *ticket)
 {
     CHECK(ticket!=NULL);
@@ -159,10 +179,10 @@ static void Setup(void)
 }
 static void Ready(void)
 {
-    CanLink_Init(ReadStatus,RequestStop);
+    CanLink_Init(ReadStatus,RequestStop,CheckTargets);
     CHECK(can_link_diag.state == 1U && can_link_error_count == 0U);
     CHECK(config_calls == 1U && global_calls == 1U && blocking_calls == 1U && start_calls == 1U);
-    CanLink_Init(IgnoredStatus,IgnoredStop);
+    CanLink_Init(IgnoredStatus,IgnoredStop,IgnoredTargets);
     CHECK(config_calls == 1U && start_calls == 1U);
 }
 static void Queue(uint32_t dlc, uint32_t index, uint32_t count)
@@ -288,7 +308,7 @@ static void Latched(int busoff, int register_only)
     CHECK(can_link_diag.error_flags == (busoff ? CAN_LINK_ERROR_BUS_OFF : CAN_LINK_ERROR_RAM));
     CHECK(can_link_error_count == 1U && receive_calls == 0U && send_calls == 0U);
     host_can_registers.PSR = 0U; host_can_registers.IR = 0U;
-    CanLink_Init(ReadStatus,RequestStop); CanLink_Poll();
+    CanLink_Init(ReadStatus,RequestStop,CheckTargets); CanLink_Poll();
     CHECK(can_link_diag.state == (busoff ? 3U : 2U));
     CHECK(start_calls == 1U && receive_calls == 0U && send_calls == 0U);
 }
@@ -312,22 +332,22 @@ static void BadConfig(unsigned field)
     case 5: host_can_registers.ILE = 1U; break;
     default: hfdcan1.Instance = NULL; break;
     }
-    CanLink_Init(ReadStatus,RequestStop);
+    CanLink_Init(ReadStatus,RequestStop,CheckTargets);
     CHECK(can_link_diag.state == 2U && can_link_diag.error_flags == CAN_LINK_ERROR_CONFIG);
     CHECK(can_link_error_count == 1U && config_calls == 0U && start_calls == 0U);
-    CanLink_Init(ReadStatus,RequestStop); CanLink_Poll();
+    CanLink_Init(ReadStatus,RequestStop,CheckTargets); CanLink_Poll();
     CHECK(can_link_error_count == 1U && receive_calls == 0U && start_calls == 0U);
 }
 static void InitFailure(unsigned step)
 {
     fail_init_at = step;
-    CanLink_Init(ReadStatus,RequestStop);
+    CanLink_Init(ReadStatus,RequestStop,CheckTargets);
     CHECK(can_link_diag.state == 2U && can_link_diag.error_flags == CAN_LINK_ERROR_INIT);
     CHECK(can_link_error_count == 1U);
     CHECK(config_calls == 1U && global_calls == (step >= 2U));
     CHECK(blocking_calls == (step >= 3U) && start_calls == (step >= 4U));
     fail_init_at = 0U;
-    CanLink_Init(ReadStatus,RequestStop); CanLink_Poll();
+    CanLink_Init(ReadStatus,RequestStop,CheckTargets); CanLink_Poll();
     CHECK(config_calls == 1U && receive_calls == 0U && can_link_diag.state == 2U);
 }
 
@@ -342,10 +362,10 @@ static void QueueQuery(uint8_t opcode, uint8_t token)
 static void QueryValid(void)
 {
     static const uint8_t expected[][8]={
-        {0x52U,0x01U,0x01U,0xA5U,0x3FU,0U,0x01U,0U},
+        {0x52U,0x01U,0x01U,0xA5U,0x7FU,0U,0x01U,0U},
         {0x52U,0x01U,0x02U,0xA6U,0x05U,0x19U,0xCDU,0xABU},
         {0x52U,0x01U,0x03U,0xA7U,0xEFU,0xBEU,0xADU,0xDEU},
-        {0x52U,0x01U,0x04U,0xA8U,0x02U,0x08U,0U,0U}
+        {0x52U,0x01U,0x04U,0xA8U,0x03U,0x08U,0U,0U}
     };
     static const unsigned reads[]={0U,1U,2U,2U};
     CanLinkReadStatus before;
@@ -478,11 +498,11 @@ static void QueryBusOff(void)
 }
 static void NoProvider(void)
 {
-    CanLink_Init(NULL,RequestStop);
+    CanLink_Init(NULL,RequestStop,CheckTargets);
     CHECK(can_link_diag.state==2U);
     CHECK(can_link_error_count==1U && can_link_diag.error_flags==CAN_LINK_ERROR_CONFIG);
     CHECK(config_calls==0U && start_calls==0U);
-    CanLink_Init(ReadStatus,RequestStop);
+    CanLink_Init(ReadStatus,RequestStop,CheckTargets);
     QueueQuery(2U,0U); CanLink_Poll();
     CHECK(can_link_error_count==1U && can_link_diag.state==2U);
     CHECK(receive_calls==0U && send_calls==0U && status_reads==0U);
@@ -633,9 +653,9 @@ static void StopUnavailable(int busoff)
 }
 static void NoStopProvider(void)
 {
-    CanLink_Init(ReadStatus,NULL);
+    CanLink_Init(ReadStatus,NULL,CheckTargets);
     CHECK(can_link_diag.state==2U && can_link_diag.error_flags==CAN_LINK_ERROR_CONFIG);
-    CanLink_Init(ReadStatus,RequestStop);
+    CanLink_Init(ReadStatus,RequestStop,CheckTargets);
     QueueStop(1U); CanLink_Poll();
     CHECK(can_link_error_count==1U && config_calls==0U && stop_calls==0U);
 }
@@ -700,6 +720,163 @@ static void StopCore(unsigned mode)
     if(mode==2U) CHECK(real_core.config_valid==0U);
 }
 
+
+static void QueueTarget(uint8_t token,uint16_t speed_bits,uint16_t iq_ma)
+{
+    Queue(8U,0U,1U);
+    incoming_data[0]=0x43U;incoming_data[1]=1U;incoming_data[2]=0x20U;incoming_data[3]=token;
+    incoming_data[4]=(uint8_t)speed_bits;incoming_data[5]=(uint8_t)(speed_bits>>8U);
+    incoming_data[6]=(uint8_t)iq_ma;incoming_data[7]=(uint8_t)(iq_ma>>8U);
+}
+static void ExpectTarget(uint8_t result)
+{
+    uint8_t expected[8];
+    memcpy(expected,incoming_data,sizeof(expected));
+    expected[0]=0x56U;expected[2]=result;
+    CHECK(memcmp(expected,sent_data,sizeof(expected))==0);
+}
+static void TargetValid(void)
+{
+    unsigned result;
+    Ready();
+    for(result=1U;result<=4U;++result) {
+        target_result=(uint8_t)result;
+        QueueTarget((uint8_t)result,0xFF9CU,500U);fifo_fill=8U;
+        CanLink_Poll();ExpectTarget((uint8_t)result);
+        CHECK(checked_speed==-100 && checked_iq==500U);
+        CHECK(target_calls==result && receive_calls==result && send_calls==result);
+        CHECK(fifo_fill==7U); /* <=1 request per poll, independent of result */
+        CHECK(can_link_rx_count==0U && can_query_rx_count==0U && stop_calls==0U);
+    }
+    QueueTarget(4U,0xFF9CU,500U);CanLink_Poll();ExpectTarget(4U);
+    CHECK(target_calls==5U); /* Duplicate is rechecked, never retained as a command. */
+    fifo_fill=0U;CanLink_Poll();
+    CHECK(target_calls==5U && send_calls==5U && status_reads==0U);
+    CHECK(can_link_error_count==0U && can_link_diag.tx_enqueued_count==5U);
+}
+static void TargetRejects(void)
+{
+    unsigned i;
+    Ready();
+    for(i=0U;i<10U;++i) {
+        QueueTarget(0U,100U,500U);
+        switch(i) {
+        case 0:incoming_data[0]=0x56U;break;
+        case 1:incoming_data[1]=2U;break;
+        case 2:incoming_data[2]=0x21U;break;
+        case 3:incoming.Identifier=0x322U;break;
+        case 4:incoming.IdType=1U;break;
+        case 5:incoming.RxFrameType=1U;break;
+        case 6:incoming.FDFormat=1U;break;
+        case 7:incoming.BitRateSwitch=1U;break;
+        case 8:incoming.DataLength=7U;break;
+        default:incoming_data[0]=0x51U;break;
+        }
+        CanLink_Poll();
+        CHECK(target_calls==0U && stop_calls==0U && status_reads==0U && send_calls==0U);
+        CHECK(can_link_diag.rejected_count==i+1U);
+    }
+}
+static void TargetDlc(void)
+{
+    unsigned dlc;
+    Ready();
+    for(dlc=0U;dlc<16U;++dlc) {
+        unsigned rx=receive_calls,tx=send_calls,check=target_calls;
+        QueueTarget(0U,100U,500U);host_message_ram[2U]=dlc<<16U;
+        CanLink_Poll();
+        if(dlc==8U) {
+            CHECK(receive_calls==rx+1U && send_calls==tx+1U && target_calls==check+1U);
+        } else {
+            CHECK(receive_calls==rx && send_calls==tx && target_calls==check);
+            CHECK(host_can_registers.RXF0A==0U);
+        }
+    }
+    CHECK(can_link_diag.rejected_count==15U && target_calls==1U);
+}
+static void TargetFailure(unsigned mode)
+{
+    Ready();QueueTarget(0xA5U,0x8000U,0xFFFFU);
+    if(mode==0U)fifo_free=0U;
+    else if(mode==1U)send_result=HAL_ERROR;
+    else if(mode==2U)receive_result=HAL_ERROR;
+    else host_can_registers.PSR=FDCAN_PSR_BO;
+    CanLink_Poll();
+    CHECK(target_calls==(mode<2U?1U:0U));
+    CHECK(send_calls==(mode==1U?1U:0U));
+    CHECK(receive_calls==(mode==3U?0U:1U));
+    CHECK(can_link_error_count==1U && can_link_diag.tx_enqueued_count==0U);
+    CHECK(can_link_diag.error_flags==(mode==0U?CAN_LINK_ERROR_TX_BUSY:
+        mode==3U?CAN_LINK_ERROR_BUS_OFF:CAN_LINK_ERROR_HAL));
+    if(mode<2U) {
+        unsigned prev=send_calls;
+        fifo_free=32U;send_result=HAL_OK;fifo_fill=0U;CanLink_Poll();
+        CHECK(send_calls==prev && target_calls==1U); /* No delayed command/reply. */
+        QueueTarget(0xA5U,0x8000U,0xFFFFU);CanLink_Poll();ExpectTarget(1U);
+        CHECK(target_calls==2U && checked_speed==-32768 && checked_iq==65535U);
+    }
+}
+static void TargetMissing(void)
+{
+    CanLink_Init(ReadStatus,RequestStop,NULL);
+    CHECK(can_link_diag.state==2U && can_link_diag.error_flags==CAN_LINK_ERROR_CONFIG);
+    CanLink_Init(ReadStatus,RequestStop,CheckTargets);
+    QueueTarget(0U,0U,0U);CanLink_Poll();
+    CHECK(config_calls==0U && target_calls==0U && send_calls==0U);
+    CHECK(can_link_error_count==1U);
+}
+static void TargetBadProvider(void)
+{
+    Ready();
+    target_result=0U;QueueTarget(0U,0U,0U);CanLink_Poll();ExpectTarget(4U);
+    CHECK(can_link_error_count==1U && can_link_diag.error_flags==CAN_LINK_ERROR_CONFIG);
+    target_result=255U;QueueTarget(0U,0U,0U);CanLink_Poll();ExpectTarget(4U);
+    CHECK(can_link_error_count==2U && can_link_diag.state==1U);
+}
+static void TargetCore(void)
+{
+    static const uint16_t speeds[]={0U,1000U,0xFC18U,1001U,0xFC17U,0x8000U,0U,0x7FFFU};
+    static const uint16_t currents[]={0U,4000U,4000U,0U,500U,65535U,4001U,4000U};
+    static const uint8_t results[]={1U,1U,1U,2U,2U,2U,2U,2U};
+    AxisCommandCore before;
+    unsigned i;
+    uint32_t active_seq,pending_seq;
+    AxisCommand_Init(&real_core,&target_limits);use_core=1U;target_use_limits=1U;
+    active_seq=PublishFixture(AXIS_CMD_START,1U);
+    AxisCommand_Tick(&real_core,1U,0U,1U);
+    pending_seq=PublishFixture(AXIS_CMD_UPDATE,2U);
+    CHECK(real_core.active_valid && real_core.pending_ready && active_seq!=pending_seq);
+    before=real_core;
+    Ready();
+    for(i=0U;i<sizeof(results)/sizeof(results[0]);++i) {
+        QueueTarget((uint8_t)i,speeds[i],currents[i]);CanLink_Poll();ExpectTarget(results[i]);
+        CHECK(memcmp(&before,&real_core,sizeof(before))==0);
+    }
+    target_limits.confirmed=0U;
+    QueueTarget(0U,100U,500U);CanLink_Poll();ExpectTarget(3U);
+    CHECK(memcmp(&before,&real_core,sizeof(before))==0);
+    target_limits.confirmed=1U;
+    /* Fault and stale state do not turn numeric preflight into authorization. */
+    AxisCommand_Tick(&real_core,3U,0x80U,1U);before=real_core;
+    QueueTarget(0U,100U,500U);CanLink_Poll();ExpectTarget(1U);
+    CHECK(real_core.fault_latched && memcmp(&before,&real_core,sizeof(before))==0);
+    CHECK(stop_calls==0U && status_reads==0U);
+}
+
+
+static void StopTargetRetained(void)
+{
+    Ready();
+    QueueStop(7U);CanLink_Poll();ExpectStop(7U,1U);
+    QueueTarget(9U,100U,500U);CanLink_Poll();ExpectTarget(1U);
+    QueueStop(7U);CanLink_Poll();ExpectStop(7U,1U);
+    CHECK(stop_calls==1U && target_calls==1U);
+    observed_status.stop_applied_ticket=41U;
+    target_result=2U;QueueTarget(10U,1001U,4001U);CanLink_Poll();ExpectTarget(2U);
+    QueueStop(7U);CanLink_Poll();ExpectStop(7U,2U);
+    CHECK(stop_calls==1U && target_calls==2U && can_link_error_count==0U);
+}
+
 int main(int argc, char **argv)
 {
     CHECK(argc == 2);
@@ -737,11 +914,20 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "stop-no-provider")) NoStopProvider();
     else if (!strcmp(argv[1], "stop-max-id")) StopMaxId();
     else if (!strncmp(argv[1], "stop-core-",10)) StopCore((unsigned)atoi(argv[1]+10));
+    else if (!strcmp(argv[1], "stop-target-retained")) StopTargetRetained();
+    else if (!strcmp(argv[1], "target-valid")) TargetValid();
+    else if (!strcmp(argv[1], "target-rejects")) TargetRejects();
+    else if (!strcmp(argv[1], "target-dlc")) TargetDlc();
+    else if (!strcmp(argv[1], "target-missing")) TargetMissing();
+    else if (!strcmp(argv[1], "target-bad-provider")) TargetBadProvider();
+    else if (!strcmp(argv[1], "target-core")) TargetCore();
+    else if (!strncmp(argv[1], "target-failure-",15)) TargetFailure((unsigned)atoi(argv[1]+15));
     else if (!strncmp(argv[1], "bad-config-", 11)) BadConfig((unsigned)atoi(argv[1] + 11));
     else if (!strncmp(argv[1], "init-fail-", 10)) InitFailure((unsigned)atoi(argv[1] + 10));
     else CHECK(0);
     if(strncmp(argv[1],"stop-",5)) CHECK(stop_calls==0U);
-    CHECK(ignored_stop_calls==0U);
+    CHECK(ignored_stop_calls==0U && ignored_target_calls==0U);
+    if(strncmp(argv[1],"target-",7) && strcmp(argv[1],"stop-target-retained"))CHECK(target_calls==0U);
     printf("CAN service %s: %u assertions PASS\n", argv[1], checks);
     return 0;
 }

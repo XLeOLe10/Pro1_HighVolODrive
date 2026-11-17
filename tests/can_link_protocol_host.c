@@ -181,8 +181,8 @@ static void ValidQueries(void)
     uint8_t expected[8] = {0x52U,0x01U,0U,0U,0U,0U,0U,0U};
     CHECK(CAN_QUERY_INFO == 1U && CAN_QUERY_STATUS == 2U);
     CHECK(CAN_QUERY_FAULT == 3U && CAN_QUERY_BUILD == 4U);
-    CHECK(CAN_QUERY_INFO_VALUE == 0x0001003FU);
-    CHECK(CAN_QUERY_BUILD_REVISION == 0x00000802U);
+    CHECK(CAN_QUERY_INFO_VALUE == 0x0001007FU);
+    CHECK(CAN_QUERY_BUILD_REVISION == 0x00000803U);
     for (opcode=1U; opcode<=4U; ++opcode) {
         for (token=0U; token<256U; ++token) {
             request=Query((uint8_t)opcode,(uint8_t)token);
@@ -340,6 +340,98 @@ static void StopFrames(void)
     CHECK(CanLinkProtocol_MakeStopReply(NULL,1U,NULL)==0);
 }
 
+
+static CanLinkFrame Target(uint8_t token,uint16_t speed_bits,uint16_t iq_ma)
+{
+    CanLinkFrame f=Ping();
+    f.data[0]=0x43U; f.data[1]=1U; f.data[2]=0x20U; f.data[3]=token;
+    f.data[4]=(uint8_t)speed_bits; f.data[5]=(uint8_t)(speed_bits>>8U);
+    f.data[6]=(uint8_t)iq_ma; f.data[7]=(uint8_t)(iq_ma>>8U);
+    return f;
+}
+static void RejectTarget(const CanLinkFrame *request)
+{
+    CanLinkTargetPair pair;
+    CanLinkFrame reply;
+    unsigned char before[sizeof(reply)],pair_before[sizeof(pair)];
+    memset(&pair,0x59,sizeof(pair)); memcpy(pair_before,&pair,sizeof(pair));
+    memset(&reply,0xD6,sizeof(reply)); memcpy(before,&reply,sizeof(reply));
+    CHECK(CanLinkProtocol_ReadTargetCheck(request,&pair)==0);
+    CHECK(memcmp(&pair,pair_before,sizeof(pair))==0);
+    CHECK(CanLinkProtocol_MakeTargetCheckReply(request,1U,&reply)==0);
+    CHECK(memcmp(&reply,before,sizeof(reply))==0);
+}
+static void TargetFrames(void)
+{
+    static const uint16_t speed_bits[]={0U,1U,1000U,0x7FFFU,0x8000U,0xFC18U,0xFF9CU,0xFFFFU};
+    static const int32_t speeds[]={0,1,1000,32767,-32768,-1000,-100,-1};
+    static const uint16_t currents[]={0U,1U,500U,4000U,4001U,0xFFFFU};
+    CanLinkFrame request,reply;
+    CanLinkTargetPair pair;
+    unsigned i,j,token,status,field;
+    unsigned char before[sizeof(request)];
+    CHECK(CAN_TARGET_CHECK_OPCODE==0x20U);
+    CHECK(CAN_TARGET_CHECK_OK==1U && CAN_TARGET_CHECK_RANGE==2U);
+    CHECK(CAN_TARGET_CHECK_CONFIG==3U && CAN_TARGET_CHECK_REJECTED==4U);
+    for(i=0U;i<sizeof(speeds)/sizeof(speeds[0]);++i) {
+        for(j=0U;j<sizeof(currents)/sizeof(currents[0]);++j) {
+            request=Target(0xA5U,speed_bits[i],currents[j]);
+            memcpy(before,&request,sizeof(request));
+            CHECK(CanLinkProtocol_ReadTargetCheck(&request,&pair)==1);
+            CHECK(pair.speed_rpm==speeds[i] && pair.iq_limit_ma==currents[j]);
+            CHECK(memcmp(before,&request,sizeof(request))==0);
+            /* Range validation belongs to the provider, not this codec. */
+            ExpectRejected(&request); RejectQuery(&request); RejectStop(&request);
+        }
+    }
+    /* Every token and response status; reply echoes the exact whole pair.
+     * Different signed/unsigned boundary encodings also survive in-place use. */
+    for(token=0U;token<256U;++token) for(status=1U;status<=4U;++status) {
+        uint8_t expected[8]={0x56U,1U,0U,0U,0x9CU,0xFFU,0xF4U,1U};
+        expected[2]=(uint8_t)status; expected[3]=(uint8_t)token;
+        request=Target((uint8_t)token,0xFF9CU,500U);
+        memcpy(before,&request,sizeof(request));
+        CHECK(CanLinkProtocol_MakeTargetCheckReply(&request,(uint8_t)status,&reply)==1);
+        CheckQueryReply(&reply,expected);
+        CHECK(memcmp(before,&request,sizeof(request))==0);
+        CHECK(CanLinkProtocol_MakeTargetCheckReply(&request,(uint8_t)status,&request)==1);
+        CheckQueryReply(&request,expected);
+        RejectTarget(&request); /* Returned results must not become requests. */
+    }
+    for(i=0U;i<256U;++i) {
+        request=Target(0U,0U,0U);
+        if(i!=8U) {request.length=(uint8_t)i;RejectTarget(&request);}
+        for(field=0U;field<3U;++field) {
+            uint8_t correct=(field==0U)?0x43U:(field==1U)?1U:0x20U;
+            if(i==correct)continue;
+            request=Target(0U,0U,0U);request.data[field]=(uint8_t)i;RejectTarget(&request);
+        }
+        if(i<1U || i>4U) {
+            request=Target(0U,1U,1U);memcpy(before,&request,sizeof(request));
+            CHECK(CanLinkProtocol_MakeTargetCheckReply(&request,(uint8_t)i,&request)==0);
+            CHECK(memcmp(before,&request,sizeof(request))==0);
+        }
+        if(i) {
+            request=Target(0U,0U,0U);request.extended=(uint8_t)i;RejectTarget(&request);
+            request=Target(0U,0U,0U);request.remote=(uint8_t)i;RejectTarget(&request);
+            request=Target(0U,0U,0U);request.fd=(uint8_t)i;RejectTarget(&request);
+            request=Target(0U,0U,0U);request.brs=(uint8_t)i;RejectTarget(&request);
+        }
+    }
+    for(i=0U;i<0x800U;++i)if(i!=0x321U) {
+        request=Target(0U,0U,0U);request.id=i;RejectTarget(&request);
+    }
+    request=Target(0U,0U,0U);request.id=0xFFFFFFFFU;RejectTarget(&request);
+    request=Target(0U,0U,0U);
+    CHECK(CanLinkProtocol_ReadTargetCheck(&request,NULL)==0);
+    CHECK(CanLinkProtocol_MakeTargetCheckReply(&request,1U,NULL)==0);
+    CHECK(CanLinkProtocol_MakeTargetCheckReply(NULL,1U,NULL)==0);
+    RejectTarget(NULL);
+    request=Ping();RejectTarget(&request);
+    request=Query(1U,0U);RejectTarget(&request);
+    request=Stop(1U);RejectTarget(&request);
+}
+
 int main(void)
 {
     ValidFrames();
@@ -347,6 +439,7 @@ int main(void)
     ValidQueries();
     InvalidQueries();
     StopFrames();
+    TargetFrames();
     printf("CAN protocol HOST PASS: %u assertions\n", checks);
     return EXIT_SUCCESS;
 }

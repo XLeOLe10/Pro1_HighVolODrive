@@ -50,9 +50,13 @@ typedef void (*CanLinkStatusReader)(CanLinkReadStatus *snapshot);
 /* appTask only, bounded/nonblocking. Returns 1 with a nonzero ticket only
  * after the independent STOP channel accepts; otherwise 0. No start/clear. */
 typedef uint32_t (*CanLinkStopRequester)(uint32_t *ticket);
+/* Read-only, appTask, bounded; returns one CAN_TARGET_CHECK_* wire status.
+ * Must NOT publish/control/renew a command, or retain an approved target. */
+typedef uint8_t (*CanLinkTargetChecker)(int32_t speed_rpm, uint32_t iq_limit_ma);
 
 /* Bench-only, one startup call in appTask. No retry/recovery during this test. */
-void CanLink_Init(CanLinkStatusReader read_status, CanLinkStopRequester request_stop);
+void CanLink_Init(CanLinkStatusReader read_status, CanLinkStopRequester request_stop,
+                  CanLinkTargetChecker check_targets);
 /* After resolver acquisition: <=1 receive, <=1 enqueue, no waits/heap.
  * STATUS/FAULT/STOP-result uses bounded PRIMASK copies, encoding/HAL outside.
  * Only one control producer per boot. STOP IDs never wrap; the latest accepted

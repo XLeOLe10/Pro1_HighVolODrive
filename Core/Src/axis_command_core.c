@@ -62,6 +62,18 @@ void AxisCommand_Init(AxisCommandCore *c, const AxisCommandLimits *limits)
     c->result = c->config_valid ? AXIS_CMD_OK : AXIS_CMD_CONFIG_UNSET;
 }
 
+uint32_t AxisCommand_ValidateTargets(const AxisCommandLimits *limits,
+                                    float speed_target_rpm, float iq_limit_a)
+{
+    if (!LimitsValid(limits)) return AXIS_CMD_CONFIG_UNSET;
+    if (!Finite(speed_target_rpm) || !Finite(iq_limit_a) ||
+        (iq_limit_a < 0.0f) || (iq_limit_a > limits->max_iq_a) ||
+        (speed_target_rpm > limits->max_abs_speed_rpm) ||
+        (speed_target_rpm < -limits->max_abs_speed_rpm))
+        return AXIS_CMD_INVALID;
+    return AXIS_CMD_OK;
+}
+
 uint32_t AxisCommand_Validate(const AxisCommandLimits *limits,
                              const AxisCommandFrame *frame, uint32_t now)
 {
@@ -71,11 +83,9 @@ uint32_t AxisCommand_Validate(const AxisCommandLimits *limits,
     if (frame->control_mode != AXIS_CMD_SPEED_MODE)
         return AXIS_CMD_UNSUPPORTED_MODE;
     if (((frame->opcode != AXIS_CMD_START) && (frame->opcode != AXIS_CMD_UPDATE)) ||
-        (frame->run_epoch == 0U) || !Finite(frame->speed_target_rpm) ||
-        !Finite(frame->iq_limit_a) || (frame->iq_limit_a < 0.0f) ||
-        (frame->iq_limit_a > limits->max_iq_a) ||
-        (frame->speed_target_rpm > limits->max_abs_speed_rpm) ||
-        (frame->speed_target_rpm < -limits->max_abs_speed_rpm))
+        (frame->run_epoch == 0U) ||
+        (AxisCommand_ValidateTargets(limits, frame->speed_target_rpm,
+                                    frame->iq_limit_a) != AXIS_CMD_OK))
         return AXIS_CMD_INVALID;
     if (!TimeValid(frame, now, limits->max_lifetime_ms)) return AXIS_CMD_EXPIRED;
     return AXIS_CMD_OK;

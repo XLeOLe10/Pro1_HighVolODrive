@@ -66,6 +66,13 @@ void AxisCommandPort_Init(void)
     PublishDiagnostics(HAL_GetTick());
 }
 
+uint32_t AxisCommandPort_CheckTargets(float speed_target_rpm, float iq_limit_a)
+{
+    if (IsPublisher() == 0U) return AXIS_CMD_INVALID_CONTEXT;
+    /* No synthetic command/epoch/lease and no access to command_core. */
+    return AxisCommand_ValidateTargets(&command_limits, speed_target_rpm, iq_limit_a);
+}
+
 uint32_t AxisCommandPort_Submit(const AxisCommandFrame *request, uint32_t *seq)
 {
     AxisCommandFrame local;

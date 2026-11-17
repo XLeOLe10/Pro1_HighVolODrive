@@ -18,6 +18,7 @@ volatile CanLinkDiagnostics can_link_diag;
 static uint8_t init_attempted;
 static CanLinkStatusReader status_reader;
 static CanLinkStopRequester stop_requester;
+static CanLinkTargetChecker target_checker;
 /* appTask-owned single retained result, no ISR access and no dynamic memory.
  * Sole producer + nonzero increasing IDs bounds Stop calls to UINT32_MAX,
  * preventing reuse of a saturated core ticket. Revisit if adding producers. */
@@ -30,12 +31,13 @@ static void LinkError(uint32_t flags)
     can_link_diag.error_flags |= flags;
 }
 
-void CanLink_Init(CanLinkStatusReader read_status, CanLinkStopRequester request_stop)
+void CanLink_Init(CanLinkStatusReader read_status, CanLinkStopRequester request_stop,
+                  CanLinkTargetChecker check_targets)
 {
     FDCAN_FilterTypeDef filter = {0};
     if (init_attempted != 0U) return;
     init_attempted = 1U;
-    if ((read_status == 0) || (request_stop == 0))
+    if ((read_status == 0) || (request_stop == 0) || (check_targets == 0))
     {
         LinkError(CAN_LINK_ERROR_CONFIG);
         can_link_diag.state = 2U;
@@ -43,6 +45,7 @@ void CanLink_Init(CanLinkStatusReader read_status, CanLinkStopRequester request_
     }
     status_reader = read_status;
     stop_requester = request_stop;
+    target_checker = check_targets;
     /* Check generated geometry before directly peeking the FIFO header below.
      * This service assumes sole FDCAN1 use and an 8-byte blocking FIFO. */
     if ((hfdcan1.Instance != FDCAN1) ||
@@ -175,9 +178,11 @@ void CanLink_Poll(void)
     FDCAN_TxHeaderTypeDef tx = {0};
     CanLinkFrame request;
     CanLinkFrame reply;
+    CanLinkTargetPair pair;
     uint32_t index;
     uint32_t stop_id;
     uint8_t opcode;
+    uint8_t check_result;
     volatile const uint32_t *element;
     if (can_link_diag.state != 1U) return;
     PollErrors();
@@ -230,12 +235,28 @@ void CanLink_Poll(void)
         else
         {
             stop_id = CanLinkProtocol_StopRequestId(&request);
-            if (stop_id == 0U)
+            if (stop_id != 0U)
+            {
+                (void)CanLinkProtocol_MakeStopReply(&request, HandleStop(stop_id), &reply);
+            }
+            else if (CanLinkProtocol_ReadTargetCheck(&request, &pair) != 0)
+            {
+                /* Same complete private pair; never submit or stamp a lease.
+                 * Old/repeated frames only repeat this read-only precheck. */
+                check_result = target_checker(pair.speed_rpm, pair.iq_limit_ma);
+                if ((check_result < CAN_TARGET_CHECK_OK) ||
+                    (check_result > CAN_TARGET_CHECK_REJECTED))
+                {
+                    check_result = CAN_TARGET_CHECK_REJECTED;
+                    LinkError(CAN_LINK_ERROR_CONFIG);
+                }
+                (void)CanLinkProtocol_MakeTargetCheckReply(&request, check_result, &reply);
+            }
+            else
             {
                 can_link_diag.rejected_count++;
                 return;
             }
-            (void)CanLinkProtocol_MakeStopReply(&request, HandleStop(stop_id), &reply);
         }
     }
     if (HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan1) == 0U)

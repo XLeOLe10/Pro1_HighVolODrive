@@ -297,12 +297,95 @@ static void TestNormalProfile(void)
 }
 #endif
 
+
+static float FloatBits(uint32_t bits)
+{
+    float value;
+    memcpy(&value,&bits,sizeof(value));
+    return value;
+}
+static void TestTargetPrecheck(void)
+{
+    static const float speeds[]={0.0f,1000.0f,-1000.0f,1001.0f,-1001.0f,0.0f,100.0f};
+    static const float currents[]={0.0f,4.0f,4.0f,0.5f,0.5f,-0.001f,4.001f};
+    AxisCommandSnapshot before,after;
+    unsigned i,locked,barrier_before,safety_before;
+    Reset();
+    host_ipsr=25U;
+    CHECK(AxisCommandPort_CheckTargets(100.0f,0.5f)==AXIS_CMD_INVALID_CONTEXT);
+    host_ipsr=0U;kernel_state=osKernelInactive;
+    CHECK(AxisCommandPort_CheckTargets(100.0f,0.5f)==AXIS_CMD_INVALID_CONTEXT);
+    kernel_state=osKernelRunning;current_thread=&wrong_token;
+    CHECK(AxisCommandPort_CheckTargets(100.0f,0.5f)==AXIS_CMD_INVALID_CONTEXT);
+    current_thread=appTaskHandle;
+    before=Snapshot();locked=disables;barrier_before=barriers;safety_before=safety_calls;
+    for(i=0U;i<sizeof(speeds)/sizeof(speeds[0]);++i) {
+#if AXIS_COMMAND_BENCH_ENABLE
+        uint32_t expected=i<3U?AXIS_CMD_OK:AXIS_CMD_INVALID;
+#else
+        uint32_t expected=AXIS_CMD_CONFIG_UNSET;
+#endif
+        CHECK(AxisCommandPort_CheckTargets(speeds[i],currents[i])==expected);
+    }
+#if AXIS_COMMAND_BENCH_ENABLE
+    CHECK(AxisCommandPort_CheckTargets(FloatBits(0x7FC00000U),0.5f)==AXIS_CMD_INVALID);
+    CHECK(AxisCommandPort_CheckTargets(100.0f,FloatBits(0x7FC00000U))==AXIS_CMD_INVALID);
+    CHECK(AxisCommandPort_CheckTargets(FloatBits(0x7F800000U),0.5f)==AXIS_CMD_INVALID);
+    CHECK(AxisCommandPort_CheckTargets(FloatBits(0xFF800000U),0.5f)==AXIS_CMD_INVALID);
+    CHECK(AxisCommandPort_CheckTargets(100.0f,FloatBits(0x7F800000U))==AXIS_CMD_INVALID);
+    CHECK(AxisCommandPort_CheckTargets(-0.0f,-0.0f)==AXIS_CMD_OK);
+#else
+    CHECK(AxisCommandPort_CheckTargets(FloatBits(0x7FC00000U),0.5f)==AXIS_CMD_CONFIG_UNSET);
+#endif
+    CHECK(disables==locked && barriers==barrier_before && safety_calls==safety_before);
+    CHECK(host_mask==0U && irq_calls==0U && board_fault_mask==0U && board_output_enabled==0U);
+    after=Snapshot();
+    CHECK(memcmp(&before,&after,sizeof(before))==0);
+    CHECK(axis_command_result==before.result && axis_command_result_seq==before.result_seq);
+}
+#if AXIS_COMMAND_BENCH_ENABLE
+static void TestPrecheckCannotPublishOrRenew(void)
+{
+    AxisCommandFrame f;
+    AxisCommandSnapshot before,after;
+    uint32_t seq_a,seq_b;
+    unsigned locked,safety_before;
+    Reset();
+    f=Frame(1U,AXIS_CMD_START,100.0f,1.0f,500U);
+    CHECK(AxisCommandPort_Submit(&f,&seq_a)==AXIS_CMD_OK);RequestIrq();
+    f=Frame(1U,AXIS_CMD_UPDATE,-200.0f,2.0f,500U);
+    CHECK(AxisCommandPort_Submit(&f,&seq_b)==AXIS_CMD_OK);
+    host_now=499U;
+    before=Snapshot();locked=disables;safety_before=safety_calls;
+    CHECK(AxisCommandPort_CheckTargets(700.0f,3.0f)==AXIS_CMD_OK);
+    CHECK(AxisCommandPort_CheckTargets(700.0f,3.0f)==AXIS_CMD_OK);
+    CHECK(AxisCommandPort_CheckTargets(-1001.0f,4.001f)==AXIS_CMD_INVALID);
+    CHECK(disables==locked && safety_calls==safety_before);
+    after=Snapshot();CHECK(memcmp(&before,&after,sizeof(before))==0);
+    RequestIrq();after=Snapshot();
+    CHECK(after.applied_seq==seq_b && after.applied_seq!=seq_a);
+    CHECK(after.active.speed_target_rpm==-200.0f && after.active.iq_limit_a==2.0f);
+    CHECK(after.active.received_tick_ms==0U && after.active.expires_tick_ms==500U);
+    host_now=500U;RequestIrq();after=Snapshot();
+    CHECK(after.active_valid==0U && after.permit==0U && after.result==AXIS_CMD_EXPIRED);
+    before=after;
+    CHECK(AxisCommandPort_CheckTargets(100.0f,0.5f)==AXIS_CMD_OK);
+    after=Snapshot();CHECK(memcmp(&before,&after,sizeof(before))==0);
+    board_fault_mask=0x40U;RequestIrq();before=Snapshot();
+    CHECK(AxisCommandPort_CheckTargets(100.0f,0.5f)==AXIS_CMD_OK);
+    after=Snapshot();CHECK(memcmp(&before,&after,sizeof(before))==0);
+    CHECK(board_fault_mask==0x40U && board_output_enabled==0U);
+}
+#endif
+
 int main(void)
 {
     TestContextsAndMask();
+    TestTargetPrecheck();
 #if AXIS_COMMAND_BENCH_ENABLE
     TestRealPublicationAndSnapshot();
     TestFaultsAndExpiry();
+    TestPrecheckCannotPublishOrRenew();
 #else
     TestNormalProfile();
 #endif

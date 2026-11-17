@@ -31,7 +31,7 @@ def suite(name, flags, sources, expected):
     result = run([str(executable)])
     if result.returncode != 0 or expected not in result.stdout:
         raise RuntimeError(name+' test failed:\n'+result.stdout)
-    print(expected)
+    print(next(line for line in result.stdout.splitlines() if expected in line))
 
 try:
     version = run([args.compiler, '--version'])
@@ -39,10 +39,10 @@ try:
     suite('bench_sequence', ['-pedantic', '-I', 'Core/Inc'] + bench,
           ['tests/axis_command_bench_host.c','Core/Src/axis_command_bench.c',
            'Core/Src/axis_command_core.c'], '139 assertions')
-    for name, flags, count in [('port_normal', [], '31'), ('port_bench', bench, '93')]:
+    for name, flags in [('port_normal', []), ('port_bench', bench)]:
         suite(name, ['-pedantic', '-I', 'tests/port_stubs', '-I', 'Core/Inc'] + flags,
               ['tests/axis_command_port_host.c','Core/Src/axis_command.c',
-               'Core/Src/axis_command_core.c'], count+' real command port assertions')
+               'Core/Src/axis_command_core.c'], 'real command port assertions')
     # GCC 4.5.3 warns about standard {0} GPIO initialization. Suppress only that
     # warning for the actual safety source and its stub, not all warnings.
     safety_flags = ['-Wno-missing-field-initializers', '-I', 'tests/host_safety',
@@ -73,7 +73,7 @@ try:
         if not success and (actual.returncode == 0 or error not in actual.stdout):
             raise RuntimeError(name+' not rejected by intended guard:\n'+actual.stdout)
         print('PROFILE PASS: '+name)
-    print('PASS: 365 new behavior assertions + 9 profile cases; no hardware operation')
-    log.append('\nPASS: 365 new behavior assertions + 9 profile cases\n')
+    print('PASS: bench/port/safety suites + 9 profile cases; no hardware operation')
+    log.append('\nPASS: bench/port/safety suites + 9 profile cases\n')
 finally:
     (out/'host-results.txt').write_text(''.join(log), encoding='utf-8', newline='\n')

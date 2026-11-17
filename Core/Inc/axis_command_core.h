@@ -9,7 +9,7 @@ enum {
     AXIS_CMD_STALE_EPOCH, AXIS_CMD_BAD_SEQUENCE, AXIS_CMD_STOP_PENDING,
     AXIS_CMD_FAULT, AXIS_CMD_NOT_RUNNING, AXIS_CMD_ALREADY_RUNNING,
     AXIS_CMD_NOT_READY, AXIS_CMD_EXHAUSTED, AXIS_CMD_APPLIED,
-    AXIS_CMD_STOPPED
+    AXIS_CMD_STOPPED, AXIS_CMD_INVALID_CONTEXT
 };
 enum { AXIS_CMD_START = 1U, AXIS_CMD_UPDATE = 2U,
        AXIS_CMD_SPEED_MODE = 1U };
@@ -66,6 +66,10 @@ typedef struct {
  * Final output permission must also call Permitted with current HAL time/fault.
  */
 void AxisCommand_Init(AxisCommandCore *c, const AxisCommandLimits *limits);
+/* Pure range/config precheck only. No epoch, freshness, readiness or permission.
+ * Shared by full frame validation and diagnostic CAN pair precheck. */
+uint32_t AxisCommand_ValidateTargets(const AxisCommandLimits *limits,
+                                    float speed_target_rpm, float iq_limit_a);
 uint32_t AxisCommand_Validate(const AxisCommandLimits *limits,
                              const AxisCommandFrame *frame, uint32_t now);
 uint32_t AxisCommand_PublishValidated(AxisCommandCore *c,

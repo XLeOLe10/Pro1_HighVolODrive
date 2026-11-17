@@ -22,6 +22,10 @@ typedef struct {
 /* appTask only: fixed-size coherent copy, not a reliable protocol ACK queue. */
 uint32_t AxisCommandPort_GetSnapshot(AxisCommandSnapshot *snapshot);
 void AxisCommandPort_Init(void);
+/* appTask only; read-only config/range check using the same immutable limits.
+ * Does NOT check current fault/ready/epoch/time, publish, or renew permission.
+ * Wrong task/ISR/kernel context returns AXIS_CMD_INVALID_CONTEXT. */
+uint32_t AxisCommandPort_CheckTargets(float speed_target_rpm, float iq_limit_a);
 uint32_t AxisCommandPort_Submit(const AxisCommandFrame *request, uint32_t *seq);
 uint32_t AxisCommandPort_Stop(uint32_t *ticket);
 uint32_t AxisCommandPort_GetEpoch(void);

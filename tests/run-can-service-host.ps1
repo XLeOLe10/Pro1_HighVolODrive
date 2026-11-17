@@ -21,6 +21,9 @@ try {
         'stop-rejected', 'stop-invalid', 'stop-dlc', 'stop-busoff', 'stop-rx-fail',
         'stop-no-provider', 'stop-max-id')
     $canScenarios += 0..3 | ForEach-Object { 'stop-core-' + $_ }
+    $canScenarios += @('target-valid', 'target-rejects', 'target-dlc', 'target-missing',
+        'target-bad-provider', 'target-core', 'stop-target-retained')
+    $canScenarios += 0..3 | ForEach-Object { 'target-failure-' + $_ }
     $canScenarios += 0..6 | ForEach-Object { 'bad-config-' + $_ }
     $canScenarios += 1..4 | ForEach-Object { 'init-fail-' + $_ }
     foreach ($canScenario in $canScenarios) {

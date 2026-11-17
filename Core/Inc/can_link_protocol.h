@@ -11,9 +11,9 @@
 #define CAN_QUERY_STATUS   0x02U
 #define CAN_QUERY_FAULT    0x03U
 #define CAN_QUERY_BUILD    0x04U
-#define CAN_QUERY_INFO_VALUE     0x0001003FUL
-/* Manual interface release 008.02; NOT an automatically generated image hash. */
-#define CAN_QUERY_BUILD_REVISION 0x00000802UL
+#define CAN_QUERY_INFO_VALUE     0x0001007FUL
+/* Manual interface release 008.03; NOT an automatically generated image hash. */
+#define CAN_QUERY_BUILD_REVISION 0x00000803UL
 
 #define CAN_STOP_OPCODE    0x10U
 #define CAN_STOP_ACCEPTED  1U
@@ -21,6 +21,17 @@
 #define CAN_STOP_STALE     3U
 #define CAN_STOP_BUSY      4U
 #define CAN_STOP_REJECTED  5U
+
+#define CAN_TARGET_CHECK_OPCODE   0x20U
+#define CAN_TARGET_CHECK_OK       1U
+#define CAN_TARGET_CHECK_RANGE    2U
+#define CAN_TARGET_CHECK_CONFIG   3U
+#define CAN_TARGET_CHECK_REJECTED 4U
+
+typedef struct {
+    int32_t speed_rpm;
+    uint32_t iq_limit_ma;
+} CanLinkTargetPair;
 
 typedef struct {
     uint32_t id;
@@ -54,5 +65,14 @@ uint32_t CanLinkProtocol_StopRequestId(const CanLinkFrame *request);
  * Invalid input leaves reply unchanged; request and reply may alias. */
 int CanLinkProtocol_MakeStopReply(const CanLinkFrame *request,
                                  uint8_t status, CanLinkFrame *reply);
+
+/* Precheck only: 43 01 20 token speed_i16_rpm_LE iq_u16_mA_LE.
+ * Full payload decoded before publishing the caller-owned pair. No clamping,
+ * no command/lease, token is only reply correlation. Invalid leaves pair intact. */
+int CanLinkProtocol_ReadTargetCheck(const CanLinkFrame *request, CanLinkTargetPair *pair);
+/* 56 01 result token + original four target bytes; NOT a control ACK.
+ * Result is CAN_TARGET_CHECK_*. Invalid leaves reply intact; alias allowed. */
+int CanLinkProtocol_MakeTargetCheckReply(const CanLinkFrame *request,
+                                        uint8_t result, CanLinkFrame *reply);
 
 #endif
