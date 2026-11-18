@@ -24,8 +24,20 @@ try {
     $canScenarios += @('target-valid', 'target-rejects', 'target-dlc', 'target-missing',
         'target-bad-provider', 'target-core', 'stop-target-retained')
     $canScenarios += 0..3 | ForEach-Object { 'target-failure-' + $_ }
+    $canScenarios += 0..2 | ForEach-Object { 'boot-state-' + $_ }
+    $canScenarios += @('boot-rejects', 'boot-dlc', 'boot-missing', 'boot-bad-provider', 'stop-boot-retained')
+    $canScenarios += 0..3 | ForEach-Object { 'boot-failure-' + $_ }
     $canScenarios += 0..6 | ForEach-Object { 'bad-config-' + $_ }
     $canScenarios += 1..4 | ForEach-Object { 'init-fail-' + $_ }
+    $canScenarios += @('time-normal','time-metadata','time-progress','time-watch','time-nonfatal','time-core','stop-time-compatible')
+    $canScenarios += 0..1 | ForEach-Object { 'time-sticky-' + $_ }
+    $canScenarios += 1..6 | ForEach-Object { 'time-init-fail-' + $_ }
+    $canScenarios += 1..4 | ForEach-Object { 'time-bad-effect-' + $_ }
+    $canScenarios += 0..2 | ForEach-Object { 'time-init-boundary-' + $_ }
+    $canScenarios += 0..25 | ForEach-Object { 'time-config-' + $_ }
+    $canScenarios += 0..7 | ForEach-Object { 'time-geometry-' + $_ }
+    $canScenarios += 0..13 | ForEach-Object { 'time-edge-' + $_ }
+    $canScenarios += 0..6 | ForEach-Object { 'time-failure-' + $_ }
     foreach ($canScenario in $canScenarios) {
         & './build/can-host/can_link_service_host.exe' $canScenario
         if ($LASTEXITCODE -ne 0) { throw ('CAN service HOST failed: ' + $canScenario) }

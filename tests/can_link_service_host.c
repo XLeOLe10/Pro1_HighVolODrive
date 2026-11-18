@@ -13,6 +13,9 @@
 #include "axis_command_core.h"
 
 FDCAN_GlobalTypeDef host_can_registers;
+HostDebugRegisters host_debug_registers;
+HostRccRegisters host_rcc_registers;
+HostCanCcuRegisters host_ccu_registers;
 uint32_t host_message_ram[161];
 FDCAN_HandleTypeDef hfdcan1;
 static unsigned checks;
@@ -21,6 +24,25 @@ static unsigned checks;
 static unsigned config_calls, global_calls, blocking_calls, start_calls;
 static unsigned receive_calls, send_calls, fill_calls, free_calls, clear_calls;
 static unsigned fail_init_at;
+static unsigned time_init_calls, time_init_seen, timeout_resets, timestamp_resets;
+static unsigned fail_time_at, bad_time_at, fail_runtime_reset;
+static uint32_t kernel_clock_hz = 25000000U;
+enum { TIME_HOOK_CLOCK=1U, TIME_HOOK_RESET_BEFORE, TIME_HOOK_RX,
+       TIME_HOOK_FILL, TIME_HOOK_START, TIME_HOOK_RESET_AFTER };
+static unsigned time_hook_site, time_hook_skip, time_hook_action, time_hook_fired;
+static void TimeHook(unsigned site)
+{
+    if(time_hook_site!=site)return;
+    if(time_hook_skip!=0U) { --time_hook_skip;return; }
+    time_hook_site=0U;++time_hook_fired;
+    if(time_hook_action==1U)host_can_registers.IR|=FDCAN_IR_TOO;
+    if(time_hook_action==2U)host_can_registers.TOCV=0U;
+    if(time_hook_action==3U)host_can_registers.NBTP^=1U<<FDCAN_NBTP_NBRP_Pos;
+    if(time_hook_action==4U)host_can_registers.IR|=FDCAN_IR_RF0L;
+    if(time_hook_action==5U)host_can_registers.IR|=FDCAN_IR_MRAF;
+    if(time_hook_action==6U)host_can_registers.IR|=FDCAN_IR_WDI;
+    if(time_hook_action==7U)host_can_registers.IR|=FDCAN_IR_BO;
+}
 static uint32_t fifo_fill, fifo_free = 32U, cleared_flags;
 static HAL_StatusTypeDef receive_result = HAL_OK, send_result = HAL_OK;
 static FDCAN_RxHeaderTypeDef incoming;
@@ -28,6 +50,21 @@ static uint8_t incoming_data[8];
 static FDCAN_TxHeaderTypeDef sent_header;
 static uint8_t sent_data[8];
 static unsigned status_reads, ignored_status_reads;
+static unsigned boot_reads, ignored_boot_reads;
+static uint32_t boot_state=1U;
+static uint32_t boot_words[4]={0x01234567U,0x89ABCDEFU,0U,0xFFFFFFFFU};
+static uint32_t ReadBoot(uint32_t words[4])
+{
+    CHECK(words!=NULL);
+    ++boot_reads;
+    /* Deliberately fill even when invalid: service must suppress these words. */
+    memcpy(words,boot_words,sizeof(boot_words));
+    return boot_state;
+}
+static uint32_t IgnoredBoot(uint32_t words[4])
+{
+    (void)words;++ignored_boot_reads;return 2U;
+}
 static CanLinkReadStatus observed_status;
 static unsigned stop_calls, ignored_stop_calls;
 static uint32_t stop_success=1U, stop_ticket=41U;
@@ -84,9 +121,69 @@ void HostClearFlag(FDCAN_HandleTypeDef *h, uint32_t mask)
 {
     CHECK(h == &hfdcan1);
     ++clear_calls;
+    CHECK((mask & FDCAN_IR_TOO)==0U); /* Never clear the elapsed-gap evidence. */
     cleared_flags = mask;
     /* Emulate W1C, preserving any unrelated pending flags. */
     h->Instance->IR &= ~mask;
+}
+static HAL_StatusTypeDef TimeInitStep(FDCAN_HandleTypeDef *h,unsigned step)
+{
+    CHECK(h==&hfdcan1 && h->State==HAL_FDCAN_STATE_READY && start_calls==0U);
+    ++time_init_calls;time_init_seen|=1U<<step;
+    return fail_time_at==step ? HAL_ERROR : HAL_OK;
+}
+HAL_StatusTypeDef HAL_FDCAN_ConfigTimestampCounter(FDCAN_HandleTypeDef *h,uint32_t prescaler)
+{
+    HAL_StatusTypeDef result=TimeInitStep(h,1U);
+    CHECK(prescaler==0x000F0000U);
+    if(result==HAL_OK && bad_time_at!=1U)h->Instance->TSCC=(h->Instance->TSCC&~FDCAN_TSCC_TCP)|prescaler;
+    return result;
+}
+HAL_StatusTypeDef HAL_FDCAN_EnableTimestampCounter(FDCAN_HandleTypeDef *h,uint32_t operation)
+{
+    HAL_StatusTypeDef result=TimeInitStep(h,2U);
+    CHECK(operation==1U);
+    if(result==HAL_OK && bad_time_at!=2U)h->Instance->TSCC=(h->Instance->TSCC&~FDCAN_TSCC_TSS)|operation;
+    return result;
+}
+HAL_StatusTypeDef HAL_FDCAN_ConfigTimeoutCounter(FDCAN_HandleTypeDef *h,uint32_t operation,uint32_t period)
+{
+    HAL_StatusTypeDef result=TimeInitStep(h,3U);
+    CHECK(operation==0U && period==6250U);
+    if(result==HAL_OK && bad_time_at!=3U)
+        h->Instance->TOCC=(h->Instance->TOCC&~(FDCAN_TOCC_TOS|FDCAN_TOCC_TOP))|
+                         operation|(period<<FDCAN_TOCC_TOP_Pos);
+    return result;
+}
+HAL_StatusTypeDef HAL_FDCAN_EnableTimeoutCounter(FDCAN_HandleTypeDef *h)
+{
+    HAL_StatusTypeDef result=TimeInitStep(h,4U);
+    if(result==HAL_OK && bad_time_at!=4U)h->Instance->TOCC|=FDCAN_TOCC_ETOC;
+    return result;
+}
+HAL_StatusTypeDef HAL_FDCAN_ResetTimestampCounter(FDCAN_HandleTypeDef *h)
+{
+    HAL_StatusTypeDef result=TimeInitStep(h,5U);
+    ++timestamp_resets;
+    if(result==HAL_OK)h->Instance->TSCV=0U;
+    return result;
+}
+HAL_StatusTypeDef HAL_FDCAN_ResetTimeoutCounter(FDCAN_HandleTypeDef *h)
+{
+    HAL_StatusTypeDef result=HAL_OK;
+    CHECK(h==&hfdcan1);++timeout_resets;
+    if(start_calls==0U)result=TimeInitStep(h,6U);
+    else if(fail_runtime_reset)result=HAL_ERROR;
+    TimeHook(TIME_HOOK_RESET_BEFORE);
+    if(result==HAL_OK)h->Instance->TOCV=(h->Instance->TOCC&FDCAN_TOCC_TOP)>>FDCAN_TOCC_TOP_Pos;
+    TimeHook(TIME_HOOK_RESET_AFTER);
+    return result;
+}
+uint32_t HAL_RCCEx_GetPeriphCLKFreq(uint64_t peripheral)
+{
+    CHECK(peripheral==RCC_PERIPHCLK_FDCAN);
+    TimeHook(TIME_HOOK_CLOCK);
+    return kernel_clock_hz;
 }
 HAL_StatusTypeDef HAL_FDCAN_ConfigFilter(FDCAN_HandleTypeDef *h, const FDCAN_FilterTypeDef *f)
 {
@@ -120,12 +217,15 @@ HAL_StatusTypeDef HAL_FDCAN_Start(FDCAN_HandleTypeDef *h)
     ++start_calls;
     if (fail_init_at == 4U) return HAL_ERROR;
     h->State = HAL_FDCAN_STATE_BUSY;
+    h->Instance->CCCR&=~(FDCAN_CCCR_INIT|FDCAN_CCCR_CCE);
+    TimeHook(TIME_HOOK_START);
     return HAL_OK;
 }
 uint32_t HAL_FDCAN_GetRxFifoFillLevel(const FDCAN_HandleTypeDef *h, uint32_t fifo)
 {
     CHECK(h == &hfdcan1 && fifo == FDCAN_RX_FIFO0);
     ++fill_calls;
+    TimeHook(TIME_HOOK_FILL);
     return fifo_fill;
 }
 HAL_StatusTypeDef HAL_FDCAN_GetRxMessage(FDCAN_HandleTypeDef *h, uint32_t fifo, FDCAN_RxHeaderTypeDef *out, uint8_t *data)
@@ -133,6 +233,7 @@ HAL_StatusTypeDef HAL_FDCAN_GetRxMessage(FDCAN_HandleTypeDef *h, uint32_t fifo, 
     uint32_t index = (h->Instance->RXF0S & FDCAN_RXF0S_F0GI) >> FDCAN_RXF0S_F0GI_Pos;
     CHECK(h == &hfdcan1 && fifo == FDCAN_RX_FIFO0 && fifo_fill != 0U);
     ++receive_calls;
+    TimeHook(TIME_HOOK_RX);
     /* Receiving an unsafe DLC here fails the test before any copy. */
     CHECK(((host_message_ram[2U + index * 4U] >> 16U) & 15U) == 8U);
     if (receive_result != HAL_OK) return receive_result;
@@ -166,6 +267,13 @@ static void Setup(void)
 {
     hfdcan1.Instance = FDCAN1;
     hfdcan1.State = HAL_FDCAN_STATE_READY;
+    hfdcan1.Init.NominalPrescaler=5U;hfdcan1.Init.NominalSyncJumpWidth=1U;
+    hfdcan1.Init.NominalTimeSeg1=7U;hfdcan1.Init.NominalTimeSeg2=2U;
+    host_can_registers.NBTP=0x00040601U;
+    host_can_registers.CCCR=FDCAN_CCCR_INIT|FDCAN_CCCR_CCE|FDCAN_CCCR_DAR;
+    host_can_registers.RXF0C=(8U<<FDCAN_RXF0C_F0S_Pos)|4U;
+    host_ccu_registers.CCFG=FDCANCCU_CCFG_BCC;
+    host_debug_registers.APB1HFZ1=DBGMCU_APB1HFZ1_DBG_FDCAN;
     hfdcan1.Init.FrameFormat = FDCAN_FRAME_CLASSIC;
     hfdcan1.Init.Mode = FDCAN_MODE_NORMAL;
     hfdcan1.Init.AutoRetransmission = DISABLE;
@@ -179,11 +287,15 @@ static void Setup(void)
 }
 static void Ready(void)
 {
-    CanLink_Init(ReadStatus,RequestStop,CheckTargets);
+    CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot);
     CHECK(can_link_diag.state == 1U && can_link_error_count == 0U);
     CHECK(config_calls == 1U && global_calls == 1U && blocking_calls == 1U && start_calls == 1U);
-    CanLink_Init(IgnoredStatus,IgnoredStop,IgnoredTargets);
-    CHECK(config_calls == 1U && start_calls == 1U);
+    CanLink_Init(IgnoredStatus,IgnoredStop,IgnoredTargets,IgnoredBoot);
+    CHECK(config_calls == 1U && start_calls == 1U && boot_reads == 0U);
+    CHECK(can_link_time_diag.state==CAN_TIME_TRACKING && can_link_time_diag.reason_flags==0U);
+    CHECK(can_link_time_diag.last_rx_age_us==UINT32_MAX);
+    CHECK(time_init_calls==6U && time_init_seen==0x7EU && timestamp_resets==1U && timeout_resets==1U);
+    CHECK((host_debug_registers.APB1HFZ1&DBGMCU_APB1HFZ1_DBG_FDCAN)==0U);
 }
 static void Queue(uint32_t dlc, uint32_t index, uint32_t count)
 {
@@ -308,7 +420,7 @@ static void Latched(int busoff, int register_only)
     CHECK(can_link_diag.error_flags == (busoff ? CAN_LINK_ERROR_BUS_OFF : CAN_LINK_ERROR_RAM));
     CHECK(can_link_error_count == 1U && receive_calls == 0U && send_calls == 0U);
     host_can_registers.PSR = 0U; host_can_registers.IR = 0U;
-    CanLink_Init(ReadStatus,RequestStop,CheckTargets); CanLink_Poll();
+    CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot); CanLink_Poll();
     CHECK(can_link_diag.state == (busoff ? 3U : 2U));
     CHECK(start_calls == 1U && receive_calls == 0U && send_calls == 0U);
 }
@@ -332,22 +444,22 @@ static void BadConfig(unsigned field)
     case 5: host_can_registers.ILE = 1U; break;
     default: hfdcan1.Instance = NULL; break;
     }
-    CanLink_Init(ReadStatus,RequestStop,CheckTargets);
+    CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot);
     CHECK(can_link_diag.state == 2U && can_link_diag.error_flags == CAN_LINK_ERROR_CONFIG);
     CHECK(can_link_error_count == 1U && config_calls == 0U && start_calls == 0U);
-    CanLink_Init(ReadStatus,RequestStop,CheckTargets); CanLink_Poll();
+    CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot); CanLink_Poll();
     CHECK(can_link_error_count == 1U && receive_calls == 0U && start_calls == 0U);
 }
 static void InitFailure(unsigned step)
 {
     fail_init_at = step;
-    CanLink_Init(ReadStatus,RequestStop,CheckTargets);
+    CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot);
     CHECK(can_link_diag.state == 2U && can_link_diag.error_flags == CAN_LINK_ERROR_INIT);
     CHECK(can_link_error_count == 1U);
     CHECK(config_calls == 1U && global_calls == (step >= 2U));
     CHECK(blocking_calls == (step >= 3U) && start_calls == (step >= 4U));
     fail_init_at = 0U;
-    CanLink_Init(ReadStatus,RequestStop,CheckTargets); CanLink_Poll();
+    CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot); CanLink_Poll();
     CHECK(config_calls == 1U && receive_calls == 0U && can_link_diag.state == 2U);
 }
 
@@ -362,10 +474,10 @@ static void QueueQuery(uint8_t opcode, uint8_t token)
 static void QueryValid(void)
 {
     static const uint8_t expected[][8]={
-        {0x52U,0x01U,0x01U,0xA5U,0x7FU,0U,0x01U,0U},
+        {0x52U,0x01U,0x01U,0xA5U,0xFFU,0x01U,0x01U,0U},
         {0x52U,0x01U,0x02U,0xA6U,0x05U,0x19U,0xCDU,0xABU},
         {0x52U,0x01U,0x03U,0xA7U,0xEFU,0xBEU,0xADU,0xDEU},
-        {0x52U,0x01U,0x04U,0xA8U,0x03U,0x08U,0U,0U}
+        {0x52U,0x01U,0x04U,0xA8U,0x06U,0x08U,0U,0U}
     };
     static const unsigned reads[]={0U,1U,2U,2U};
     CanLinkReadStatus before;
@@ -423,7 +535,7 @@ static void QueryRejects(void)
         case 1: incoming_data[1]=0U; break;
         case 2: incoming_data[1]=2U; break;
         case 3: incoming_data[2]=0U; break;
-        case 4: incoming_data[2]=5U; break; /* No hidden control opcode */
+        case 4: incoming_data[2]=12U; break; /* Unknown query */
         case 5: incoming_data[2]=0xFFU; break;
         case 6: incoming_data[4]=1U; break;
         case 7: incoming_data[5]=2U; break;
@@ -498,11 +610,11 @@ static void QueryBusOff(void)
 }
 static void NoProvider(void)
 {
-    CanLink_Init(NULL,RequestStop,CheckTargets);
+    CanLink_Init(NULL,RequestStop,CheckTargets,ReadBoot);
     CHECK(can_link_diag.state==2U);
     CHECK(can_link_error_count==1U && can_link_diag.error_flags==CAN_LINK_ERROR_CONFIG);
     CHECK(config_calls==0U && start_calls==0U);
-    CanLink_Init(ReadStatus,RequestStop,CheckTargets);
+    CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot);
     QueueQuery(2U,0U); CanLink_Poll();
     CHECK(can_link_error_count==1U && can_link_diag.state==2U);
     CHECK(receive_calls==0U && send_calls==0U && status_reads==0U);
@@ -653,9 +765,9 @@ static void StopUnavailable(int busoff)
 }
 static void NoStopProvider(void)
 {
-    CanLink_Init(ReadStatus,NULL,CheckTargets);
+    CanLink_Init(ReadStatus,NULL,CheckTargets,ReadBoot);
     CHECK(can_link_diag.state==2U && can_link_diag.error_flags==CAN_LINK_ERROR_CONFIG);
-    CanLink_Init(ReadStatus,RequestStop,CheckTargets);
+    CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot);
     QueueStop(1U); CanLink_Poll();
     CHECK(can_link_error_count==1U && config_calls==0U && stop_calls==0U);
 }
@@ -818,9 +930,9 @@ static void TargetFailure(unsigned mode)
 }
 static void TargetMissing(void)
 {
-    CanLink_Init(ReadStatus,RequestStop,NULL);
+    CanLink_Init(ReadStatus,RequestStop,NULL,ReadBoot);
     CHECK(can_link_diag.state==2U && can_link_diag.error_flags==CAN_LINK_ERROR_CONFIG);
-    CanLink_Init(ReadStatus,RequestStop,CheckTargets);
+    CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot);
     QueueTarget(0U,0U,0U);CanLink_Poll();
     CHECK(config_calls==0U && target_calls==0U && send_calls==0U);
     CHECK(can_link_error_count==1U);
@@ -877,6 +989,470 @@ static void StopTargetRetained(void)
     CHECK(stop_calls==1U && target_calls==2U && can_link_error_count==0U);
 }
 
+/* New identity queries use the existing bounded read-only service. A valid
+ * identity may contain individual zero words; only the provider owns validity. */
+static void ExpectBoot(uint8_t opcode,uint8_t token,uint32_t state)
+{
+    static const uint8_t wire_words[4][4]={
+        {0x67U,0x45U,0x23U,0x01U}, {0xEFU,0xCDU,0xABU,0x89U},
+        {0U,0U,0U,0U}, {0xFFU,0xFFU,0xFFU,0xFFU}
+    };
+    uint8_t expected[8]={0x52U,0x01U,0U,0U,0U,0U,0U,0U};
+    expected[2]=opcode;expected[3]=token;
+    if(opcode==5U)expected[4]=(uint8_t)state;
+    else if(state==1U)memcpy(expected+4U,wire_words[opcode-6U],4U);
+    CHECK(memcmp(sent_data,expected,8U)==0);
+}
+static void BootQueries(uint32_t state)
+{
+    AxisCommandCore before;
+    CanLinkReadStatus status_before;
+    uint32_t words_before[4];
+    unsigned repeat,opcode,t,count=0U;
+    static const uint8_t tokens[]={0U,255U};
+    AxisCommand_Init(&real_core,&target_limits);use_core=1U;
+    (void)PublishFixture(AXIS_CMD_START,1U);
+    AxisCommand_Tick(&real_core,1U,0U,1U);
+    (void)PublishFixture(AXIS_CMD_UPDATE,2U);
+    CHECK(real_core.active_valid && real_core.pending_ready);
+    before=real_core;status_before=observed_status;
+    boot_state=state;memcpy(words_before,boot_words,sizeof(words_before));
+    Ready();
+    for(repeat=0U;repeat<2U;++repeat) {
+        for(opcode=5U;opcode<=9U;++opcode) {
+            for(t=0U;t<2U;++t) {
+                QueueQuery((uint8_t)opcode,tokens[t]);fifo_fill=8U;
+                CanLink_Poll();++count;
+                ExpectBoot((uint8_t)opcode,tokens[t],state);
+                CHECK(boot_reads==count && send_calls==count && receive_calls==count);
+                CHECK(can_query_rx_count==count && can_link_rx_count==0U && fifo_fill==7U);
+                CHECK(memcmp(&before,&real_core,sizeof(before))==0);
+                CHECK(memcmp(&status_before,&observed_status,sizeof(status_before))==0);
+                CHECK(boot_state==state && memcmp(words_before,boot_words,sizeof(words_before))==0);
+                CHECK(status_reads==0U && stop_calls==0U && target_calls==0U);
+            }
+        }
+    }
+    fifo_fill=0U;CanLink_Poll();
+    CHECK(boot_reads==count && send_calls==count && can_link_error_count==0U);
+    CHECK(can_link_diag.tx_enqueued_count==count && can_link_diag.rejected_count==0U);
+}
+static void BootRejects(void)
+{
+    unsigned opcode,i,count=0U;
+    Ready();
+    for(opcode=5U;opcode<=9U;++opcode) {
+        for(i=0U;i<16U;++i) {
+            QueueQuery((uint8_t)opcode,0xA5U);
+            switch(i) {
+            case 0:incoming.Identifier=0x322U;break;
+            case 1:incoming.IdType=2U;break;
+            case 2:incoming.RxFrameType=255U;break;
+            case 3:incoming.FDFormat=1U;break;
+            case 4:incoming.BitRateSwitch=1U;break;
+            case 5:incoming.DataLength=7U;break;
+            case 6:incoming_data[0]=0x52U;break;
+            case 7:incoming_data[1]=0U;break;
+            case 8:incoming_data[1]=2U;break;
+            case 9:incoming_data[2]=0U;break;
+            case 10:incoming_data[2]=12U;break;
+            case 11:incoming_data[2]=255U;break;
+            default:incoming_data[i-8U]=0x80U;break;
+            }
+            CanLink_Poll();++count;
+            CHECK(can_link_diag.rejected_count==count);
+            CHECK(boot_reads==0U && status_reads==0U && target_calls==0U && stop_calls==0U);
+            CHECK(send_calls==0U && free_calls==0U && can_query_rx_count==0U);
+        }
+    }
+    CHECK(can_link_error_count==0U && can_link_rx_count==0U);
+}
+static void BootDlc(void)
+{
+    unsigned opcode,dlc;
+    Ready();
+    for(opcode=5U;opcode<=9U;++opcode) {
+        for(dlc=0U;dlc<16U;++dlc) {
+            unsigned r=receive_calls,t=send_calls,b=boot_reads;
+            QueueQuery((uint8_t)opcode,0U);host_message_ram[2U]=dlc<<16U;
+            CanLink_Poll();
+            if(dlc==8U) {
+                CHECK(receive_calls==r+1U && send_calls==t+1U && boot_reads==b+1U);
+                ExpectBoot((uint8_t)opcode,0U,1U);
+            } else {
+                CHECK(receive_calls==r && send_calls==t && boot_reads==b);
+                CHECK(host_can_registers.RXF0A==0U);
+            }
+        }
+    }
+    CHECK(can_link_diag.rejected_count==75U && can_query_rx_count==5U);
+    CHECK(can_link_rx_count==0U && can_link_error_count==0U);
+}
+static void BootFailure(unsigned mode)
+{
+    uint32_t words_before[4];
+    Ready();memcpy(words_before,boot_words,sizeof(words_before));
+    QueueQuery(6U,255U);
+    if(mode==0U)fifo_free=0U;
+    if(mode==1U)send_result=HAL_ERROR;
+    if(mode==2U)receive_result=HAL_ERROR;
+    if(mode==3U)host_can_registers.PSR=FDCAN_PSR_BO;
+    CanLink_Poll();
+    CHECK(boot_reads==(mode<2U?1U:0U));
+    CHECK(can_query_rx_count==(mode<2U?1U:0U));
+    CHECK(receive_calls==(mode==3U?0U:1U));
+    CHECK(send_calls==(mode==1U?1U:0U));
+    CHECK(can_link_diag.tx_enqueued_count==0U && can_link_error_count==1U);
+    CHECK(can_link_diag.error_flags==(mode==0U?CAN_LINK_ERROR_TX_BUSY:
+          (mode==3U?CAN_LINK_ERROR_BUS_OFF:CAN_LINK_ERROR_HAL)));
+    CHECK(boot_state==1U && memcmp(words_before,boot_words,sizeof(words_before))==0);
+    CHECK(status_reads==0U && target_calls==0U && stop_calls==0U);
+    if(mode<3U) {
+        unsigned b=boot_reads,t=send_calls;
+        fifo_fill=0U;fifo_free=32U;send_result=HAL_OK;receive_result=HAL_OK;
+        CanLink_Poll();CHECK(boot_reads==b && send_calls==t);
+        QueueQuery(6U,255U);CanLink_Poll();ExpectBoot(6U,255U,1U);
+        CHECK(boot_reads==b+1U && send_calls==t+1U && can_link_diag.tx_enqueued_count==1U);
+    } else {
+        host_can_registers.PSR=0U;CanLink_Poll();
+        CHECK(can_link_diag.state==3U && boot_reads==0U && receive_calls==0U);
+    }
+}
+static void BootMissing(void)
+{
+    CanLink_Init(ReadStatus,RequestStop,CheckTargets,NULL);
+    CHECK(can_link_diag.state==2U && can_link_diag.error_flags==CAN_LINK_ERROR_CONFIG);
+    CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot);
+    QueueQuery(5U,0U);CanLink_Poll();
+    CHECK(config_calls==0U && start_calls==0U && receive_calls==0U && send_calls==0U);
+    CHECK(boot_reads==0U && status_reads==0U && can_link_error_count==1U);
+}
+static void BootBadProvider(void)
+{
+    unsigned i,opcode,count=0U;
+    static const uint32_t invalid[]={3U,0xFFFFFFFFU};
+    Ready();
+    for(i=0U;i<2U;++i) {
+        boot_state=invalid[i];
+        for(opcode=5U;opcode<=9U;++opcode) {
+            QueueQuery((uint8_t)opcode,0U);CanLink_Poll();++count;
+            ExpectBoot((uint8_t)opcode,0U,2U);
+            CHECK(boot_reads==count && can_link_error_count==count);
+            CHECK(can_link_diag.error_flags==CAN_LINK_ERROR_CONFIG && can_link_diag.state==1U);
+        }
+    }
+}
+static void StopBootRetained(void)
+{
+    unsigned opcode;
+    Ready();QueueStop(7U);CanLink_Poll();ExpectStop(7U,1U);
+    for(opcode=5U;opcode<=9U;++opcode) {
+        QueueQuery((uint8_t)opcode,7U);CanLink_Poll();ExpectBoot((uint8_t)opcode,7U,1U);
+    }
+    QueueStop(7U);CanLink_Poll();ExpectStop(7U,1U);
+    CHECK(stop_calls==1U && boot_reads==5U && target_calls==0U);
+    observed_status.stop_applied_ticket=41U;boot_state=2U;
+    QueueQuery(6U,7U);CanLink_Poll();ExpectBoot(6U,7U,2U);
+    QueueStop(7U);CanLink_Poll();ExpectStop(7U,2U);
+    CHECK(stop_calls==1U && boot_reads==6U && can_link_error_count==0U);
+}
+
+/* Hardware time tests use actual service/register contracts. Every mutation
+ * below runs in a new process; restoring mock registers never resets private
+ * sticky state. Mocks prove software ordering, not oscillator accuracy. */
+static void SetFrameClock(uint32_t now,uint32_t received)
+{
+    uint32_t index=(host_can_registers.RXF0S&FDCAN_RXF0S_F0GI)>>FDCAN_RXF0S_F0GI_Pos;
+    CHECK(index<8U);
+    host_can_registers.TSCV=now&0xFFFFU;
+    incoming.RxTimestamp=received&0xFFFFU;
+    host_message_ram[2U+index*4U]=(host_message_ram[2U+index*4U]&0xFFFF0000U)|(received&0xFFFFU);
+}
+static void ExpectTime(uint8_t op,uint8_t token,uint32_t value)
+{
+    CHECK(sent_header.Identifier==0x322U && sent_header.DataLength==FDCAN_DLC_BYTES_8);
+    CHECK(sent_data[0]==0x52U && sent_data[1]==1U && sent_data[2]==op && sent_data[3]==token);
+    CHECK(sent_data[4]==(uint8_t)value && sent_data[5]==(uint8_t)(value>>8U) &&
+          sent_data[6]==(uint8_t)(value>>16U) && sent_data[7]==(uint8_t)(value>>24U));
+}
+static void CheckTimeLost(uint32_t reasons)
+{
+    CHECK(can_link_time_diag.state==CAN_TIME_LOST);
+    CHECK(can_link_time_diag.reason_flags==reasons);
+    CHECK(can_link_time_diag.last_rx_age_us==UINT32_MAX);
+}
+static void TimeNormal(void)
+{
+    unsigned resets;
+    Ready();
+    CHECK(CAN_TIME_TICK_US==32U && CAN_TIME_SERVICE_TICKS==6250U);
+    QueueQuery(10U,0U);SetFrameClock(1U,0U);CanLink_Poll();ExpectTime(10U,0U,1U);
+    CHECK(can_link_time_diag.last_rx_age_us==32U);
+    QueueQuery(11U,255U);SetFrameClock(0x10U,0xFFF0U);
+    host_can_registers.IR|=FDCAN_IR_TSW;
+    CanLink_Poll();ExpectTime(11U,255U,1024U);
+    CHECK(can_link_time_diag.state==CAN_TIME_TRACKING && can_link_time_diag.reason_flags==0U);
+    CHECK(can_link_time_diag.last_rx_age_us==1024U);
+    resets=timeout_resets;fifo_fill=0U;host_can_registers.TSCV=0xFFFFU;
+    CanLink_Poll();CHECK(timeout_resets==resets+1U);
+    CHECK(can_link_time_diag.last_rx_age_us==1024U && receive_calls==2U);
+    QueueQuery(11U,1U);SetFrameClock(700U,700U);CanLink_Poll();ExpectTime(11U,1U,0U);
+    CHECK(can_link_error_count==0U && status_reads==0U && can_query_rx_count==3U);
+}
+static void TimeMetadata(void)
+{
+    unsigned i;
+    Ready();
+    for(i=0U;i<7U;++i) {
+        QueueQuery(11U,(uint8_t)i);SetFrameClock(100U+i,80U);
+        switch(i) {
+        case 0U:incoming.Identifier=0x320U;break;
+        case 1U:incoming.IdType=1U;break;
+        case 2U:incoming.RxFrameType=1U;break;
+        case 3U:incoming.FDFormat=1U;break;
+        case 4U:incoming.BitRateSwitch=1U;break;
+        case 5U:incoming_data[0]=0U;break;
+        default:incoming_data[4]=1U;break;
+        }
+        CanLink_Poll();CHECK(receive_calls==i+1U && send_calls==0U);
+        CHECK(can_link_diag.rejected_count==i+1U);
+        CHECK(can_link_time_diag.state==CAN_TIME_TRACKING);
+        CHECK(can_link_time_diag.last_rx_age_us==(20U+i)*32U);
+    }
+    Queue(15U,6U,1U);CanLink_Poll();
+    CHECK(host_can_registers.RXF0A==6U && receive_calls==7U);
+    CHECK(can_link_time_diag.last_rx_age_us==UINT32_MAX);
+    CHECK(can_link_time_diag.state==CAN_TIME_TRACKING && can_link_error_count==0U);
+    fifo_fill=0U;CanLink_Poll();CHECK(can_link_time_diag.last_rx_age_us==UINT32_MAX);
+}
+static void TimeBoundedProgress(void)
+{
+    unsigned i,before;
+    Ready();
+    for(i=0U;i<8U;++i) {
+        before=receive_calls;
+        Queue(i%2U?8U:15U,i,8U-i);
+        SetFrameClock(60000U,5000U+i*6250U);
+        CanLink_Poll();
+        CHECK(host_can_registers.RXF0A==i);
+        CHECK(receive_calls==before+(i%2U));
+        CHECK(can_link_time_diag.state==CAN_TIME_TRACKING);
+        CHECK(timeout_resets==2U+i);
+        if(i%2U) {
+            CHECK(fifo_fill==7U-i);
+            CHECK(can_link_time_diag.last_rx_age_us==(55000U-i*6250U)*32U);
+        } else CHECK(can_link_time_diag.last_rx_age_us==UINT32_MAX);
+    }
+    CHECK(receive_calls==4U && send_calls==4U && can_link_diag.rejected_count==4U);
+    CHECK(can_link_error_count==0U);
+}
+static void TimeSticky(unsigned zero_counter)
+{
+    unsigned resets;
+    Ready();QueueQuery(11U,1U);SetFrameClock(2U,1U);CanLink_Poll();
+    CHECK(can_link_time_diag.last_rx_age_us==32U);
+    if(zero_counter)host_can_registers.TOCV=0U;
+    else host_can_registers.IR|=FDCAN_IR_TOO|FDCAN_IR_TSW|FDCAN_IR_RF0N|FDCAN_IR_TC;
+    resets=timeout_resets;
+    QueueQuery(10U,2U);CanLink_Poll();ExpectTime(10U,2U,2U);
+    CheckTimeLost(CAN_TIME_LOSS_TIMEOUT);CHECK(timeout_resets==resets);
+    CHECK((cleared_flags&FDCAN_IR_TOO)==0U);
+    if(!zero_counter)CHECK((host_can_registers.IR&FDCAN_IR_TOO)!=0U);
+    host_can_registers.IR=0U;host_can_registers.TOCV=6250U;
+    CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot);
+    QueueQuery(11U,3U);SetFrameClock(3U,3U);CanLink_Poll();ExpectTime(11U,3U,UINT32_MAX);
+    CheckTimeLost(CAN_TIME_LOSS_TIMEOUT);
+    CHECK(timeout_resets==resets && timestamp_resets==1U && start_calls==1U);
+    CHECK(can_link_diag.state==1U && can_link_error_count==0U);
+}
+static void TimeWatch(void)
+{
+    unsigned resets;
+    Ready();
+    can_link_time_diag.state=CAN_TIME_LOST;can_link_time_diag.reason_flags=0xFFFFFFFFU;
+    can_link_time_diag.last_rx_age_us=0U;
+    QueueQuery(10U,1U);SetFrameClock(12U,10U);CanLink_Poll();ExpectTime(10U,1U,1U);
+    CHECK(can_link_time_diag.reason_flags==0U && can_link_time_diag.last_rx_age_us==64U);
+    host_can_registers.IR=FDCAN_IR_TOO;QueueQuery(10U,2U);CanLink_Poll();
+    ExpectTime(10U,2U,2U);resets=timeout_resets;
+    host_can_registers.IR=0U;host_can_registers.TOCV=6250U;
+    can_link_time_diag.state=CAN_TIME_TRACKING;can_link_time_diag.reason_flags=0U;
+    can_link_time_diag.last_rx_age_us=0U;
+    QueueQuery(11U,3U);CanLink_Poll();ExpectTime(11U,3U,UINT32_MAX);
+    CheckTimeLost(CAN_TIME_LOSS_TIMEOUT);CHECK(timeout_resets==resets);
+    CHECK(can_link_error_count==0U);
+}
+static void TimeInitFailure(unsigned step)
+{
+    unsigned calls,resets;
+    fail_time_at=step;CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot);
+    CHECK(can_link_diag.state==1U && start_calls==1U && can_link_error_count==0U);
+    CHECK(time_init_calls==step);CheckTimeLost(CAN_TIME_LOSS_HAL);
+    calls=time_init_calls;resets=timeout_resets;
+    fail_time_at=0U;CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot);
+    Queue(8U,0U,1U);CanLink_Poll();CHECK(can_link_rx_count==1U && send_calls==1U);
+    QueueQuery(10U,0U);CanLink_Poll();ExpectTime(10U,0U,2U);
+    CHECK(time_init_calls==calls && timeout_resets==resets && start_calls==1U);
+    CHECK(can_link_error_count==0U);CheckTimeLost(CAN_TIME_LOSS_HAL);
+}
+static void TimeBadEffect(unsigned step)
+{
+    bad_time_at=step;CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot);
+    CHECK(can_link_diag.state==1U && start_calls==1U && time_init_calls==6U);
+    CHECK((can_link_time_diag.reason_flags&CAN_TIME_LOSS_CONFIG)!=0U);
+    CHECK(can_link_time_diag.state==CAN_TIME_LOST && can_link_error_count==0U);
+    QueueQuery(11U,0U);CanLink_Poll();ExpectTime(11U,0U,UINT32_MAX);
+}
+static void TimeInitBoundary(unsigned mode)
+{
+    if(mode==0U)host_can_registers.IR=FDCAN_IR_TOO;
+    else if(mode==1U)host_can_registers.RXF0S=1U;
+    else { time_hook_site=TIME_HOOK_START;time_hook_action=1U; }
+    CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot);
+    CHECK(can_link_diag.state==1U && start_calls==1U && time_init_calls==6U);
+    CheckTimeLost(mode==1U?CAN_TIME_LOSS_CONFIG:CAN_TIME_LOSS_TIMEOUT);
+    if(mode==2U)CHECK(time_hook_fired==1U);
+    if(mode!=1U)CHECK((host_can_registers.IR&FDCAN_IR_TOO)!=0U);
+    QueueQuery(10U,0U);CanLink_Poll();ExpectTime(10U,0U,2U);
+    CHECK(timeout_resets==1U && can_link_error_count==0U);
+}
+static void TimeConfiguration(unsigned mode)
+{
+    unsigned resets;
+    Ready();resets=timeout_resets;
+    switch(mode) {
+    case 0U:host_can_registers.TSCC^=1U<<FDCAN_TSCC_TCP_Pos;break;
+    case 1U:host_can_registers.TSCC=0U;break;
+    case 2U:host_can_registers.TOCC^=1U<<FDCAN_TOCC_TOP_Pos;break;
+    case 3U:host_can_registers.TOCC|=1U<<FDCAN_TOCC_TOS_Pos;break;
+    case 4U:host_can_registers.TOCC&=~FDCAN_TOCC_ETOC;break;
+    case 5U:host_can_registers.NBTP^=1U<<FDCAN_NBTP_NBRP_Pos;break;
+    case 6U:host_can_registers.NBTP^=1U<<FDCAN_NBTP_NSJW_Pos;break;
+    case 7U:host_can_registers.NBTP^=1U<<FDCAN_NBTP_NTSEG1_Pos;break;
+    case 8U:host_can_registers.NBTP^=1U<<FDCAN_NBTP_NTSEG2_Pos;break;
+    case 9U:host_can_registers.CCCR|=FDCAN_CCCR_INIT;break;
+    case 10U:host_can_registers.CCCR|=FDCAN_CCCR_CSR;break;
+    case 11U:host_can_registers.CCCR|=FDCAN_CCCR_CSA;break;
+    case 12U:host_can_registers.CCCR|=FDCAN_CCCR_MON;break;
+    case 13U:host_can_registers.CCCR|=FDCAN_CCCR_TEST;break;
+    case 14U:host_can_registers.CCCR|=FDCAN_CCCR_ASM;break;
+    case 15U:host_can_registers.CCCR|=FDCAN_CCCR_FDOE;break;
+    case 16U:host_can_registers.CCCR|=FDCAN_CCCR_BRSE;break;
+    case 17U:host_can_registers.IE=1U;break;
+    case 18U:host_can_registers.ILE=1U;break;
+    case 19U:host_debug_registers.APB1HFZ1|=DBGMCU_APB1HFZ1_DBG_FDCAN;break;
+    case 20U:host_rcc_registers.D2CCIP1R=1U<<RCC_D2CCIP1R_FDCANSEL_Pos;break;
+    case 21U:kernel_clock_hz=0U;break;
+    case 22U:kernel_clock_hz=24000000U;break;
+    case 23U:host_ccu_registers.CCFG&=~FDCANCCU_CCFG_BCC;break;
+    case 24U:host_ccu_registers.CCFG|=1U<<FDCANCCU_CCFG_CDIV_Pos;break;
+    case 25U:host_ccu_registers.CCFG|=FDCANCCU_CCFG_SWR;break;
+    default:CHECK(0);break;
+    }
+    QueueQuery(10U,0U);CanLink_Poll();ExpectTime(10U,0U,2U);
+    CheckTimeLost(CAN_TIME_LOSS_CONFIG);
+    CHECK(timeout_resets==resets && can_link_error_count==0U && can_link_diag.state==1U);
+}
+static void TimeGeometry(unsigned mode)
+{
+    Ready();Queue(8U,0U,1U);
+    switch(mode) {
+    case 0U:host_can_registers.RXF0C^=1U<<FDCAN_RXF0C_F0S_Pos;break;
+    case 1U:host_can_registers.RXF0C^=1U<<FDCAN_RXF0C_F0SA_Pos;break;
+    case 2U:host_can_registers.RXF0C|=FDCAN_RXF0C_F0OM;break;
+    case 3U:host_can_registers.RXESC|=1U;break;
+    case 4U:hfdcan1.Init.RxFifo0ElmtsNbr=9U;break;
+    case 5U:hfdcan1.Init.RxFifo0ElmtSize=1U;break;
+    case 6U:hfdcan1.msgRam.RxFIFO0SA+=4U;break;
+    case 7U:fifo_fill=9U;break;
+    default:CHECK(0);break;
+    }
+    CanLink_Poll();CheckTimeLost(CAN_TIME_LOSS_CONFIG);
+    CHECK(can_link_diag.state==2U && can_link_error_count==1U);
+    CHECK(can_link_diag.error_flags==CAN_LINK_ERROR_CONFIG && receive_calls==0U && send_calls==0U);
+    CHECK(host_can_registers.RXF0A==UINT32_MAX);
+}
+static void TimeEdges(unsigned mode)
+{
+    unsigned resets;
+    static const unsigned site[]={TIME_HOOK_CLOCK,TIME_HOOK_RESET_BEFORE,TIME_HOOK_RESET_AFTER,
+        TIME_HOOK_FILL,TIME_HOOK_RX,TIME_HOOK_CLOCK,TIME_HOOK_CLOCK,TIME_HOOK_RX,
+        TIME_HOOK_RX,TIME_HOOK_RX,TIME_HOOK_RX,TIME_HOOK_RX,TIME_HOOK_CLOCK,TIME_HOOK_RESET_AFTER};
+    static const unsigned skip[]={0U,0U,0U,0U,0U,2U,3U,0U,0U,0U,0U,0U,0U,0U};
+    static const unsigned action[]={1U,1U,1U,1U,1U,1U,1U,4U,5U,6U,7U,3U,2U,2U};
+    uint32_t reason;
+    CHECK(mode<sizeof(site)/sizeof(site[0]));Ready();
+    time_hook_site=site[mode];time_hook_skip=skip[mode];time_hook_action=action[mode];
+    QueueQuery(11U,0U);SetFrameClock(400U,390U);CanLink_Poll();
+    CHECK(time_hook_fired==1U);ExpectTime(11U,0U,UINT32_MAX);
+    reason=action[mode]==4U?CAN_TIME_LOSS_RX_LOST:
+        (action[mode]>=5U?CAN_TIME_LOSS_LINK:
+        (action[mode]==3U?CAN_TIME_LOSS_CONFIG:CAN_TIME_LOSS_TIMEOUT));
+    CheckTimeLost(reason);CHECK(can_link_error_count==0U);
+    resets=timeout_resets;fifo_fill=0U;CanLink_Poll();CHECK(timeout_resets==resets);
+}
+static void TimeRuntimeFailure(unsigned mode)
+{
+    unsigned resets;
+    uint32_t reason=CAN_TIME_LOSS_HAL;
+    Ready();Queue(8U,0U,1U);
+    switch(mode) {
+    case 0U:fail_runtime_reset=1U;break;
+    case 1U:receive_result=HAL_ERROR;break;
+    case 2U:host_can_registers.IR=FDCAN_IR_RF0L;reason=CAN_TIME_LOSS_RX_LOST;break;
+    case 3U:host_can_registers.IR=FDCAN_IR_MRAF;reason=CAN_TIME_LOSS_LINK;break;
+    case 4U:host_can_registers.IR=FDCAN_IR_WDI;reason=CAN_TIME_LOSS_LINK;break;
+    case 5U:host_can_registers.IR=FDCAN_IR_BO;reason=CAN_TIME_LOSS_LINK;break;
+    case 6U:host_can_registers.PSR=FDCAN_PSR_BO;reason=CAN_TIME_LOSS_LINK;break;
+    default:CHECK(0);break;
+    }
+    CanLink_Poll();CheckTimeLost(reason);
+    CHECK(can_link_error_count==(mode==0U?0U:1U));
+    if(mode>=3U)CHECK(receive_calls==0U && send_calls==0U);
+    resets=timeout_resets;CanLink_Poll();CHECK(timeout_resets==resets);
+}
+static void TimeNonfatal(void)
+{
+    Ready();Queue(8U,0U,1U);SetFrameClock(3U,1U);
+    host_can_registers.IR=FDCAN_IR_PEA;CanLink_Poll();
+    CHECK(can_link_error_count==1U && can_link_diag.error_flags==CAN_LINK_ERROR_PROTOCOL);
+    CHECK(can_link_time_diag.state==CAN_TIME_TRACKING && can_link_time_diag.last_rx_age_us==64U);
+    Queue(8U,0U,1U);fifo_free=0U;CanLink_Poll();
+    CHECK(can_link_time_diag.state==CAN_TIME_TRACKING && can_link_error_count==2U);
+    Queue(8U,0U,1U);fifo_free=32U;send_result=HAL_ERROR;CanLink_Poll();
+    CHECK(can_link_time_diag.state==CAN_TIME_TRACKING && can_link_error_count==3U);
+    CHECK(can_link_time_diag.reason_flags==0U && timeout_resets==4U);
+}
+static void TimeCoreUntouched(void)
+{
+    unsigned i;
+    AxisCommandCore before;
+    Ready();use_core=1U;AxisCommand_Init(&real_core,&target_limits);
+    (void)PublishFixture(AXIS_CMD_START,1U);
+    AxisCommand_Tick(&real_core,1U,0U,1U);
+    CHECK(real_core.active_valid==1U && real_core.applied_seq!=0U);
+    (void)PublishFixture(AXIS_CMD_UPDATE,2U);before=real_core;
+    for(i=0U;i<4U;++i) {
+        if(i==2U)host_can_registers.IR=FDCAN_IR_TOO;
+        QueueQuery((uint8_t)(10U+i%2U),(uint8_t)i);SetFrameClock(300U,100U);CanLink_Poll();
+        CHECK(memcmp(&before,&real_core,sizeof(before))==0);
+    }
+    CHECK(status_reads==0U && stop_calls==0U && target_calls==0U && can_link_error_count==0U);
+}
+static void StopTimeCompatible(void)
+{
+    Ready();host_can_registers.IR=FDCAN_IR_TOO;
+    Queue(8U,0U,1U);CanLink_Poll();CHECK(can_link_rx_count==1U && send_calls==1U);
+    QueueStop(1U);CanLink_Poll();ExpectStop(1U,1U);
+    observed_status.stop_applied_ticket=41U;
+    QueueStop(1U);CanLink_Poll();ExpectStop(1U,2U);CHECK(stop_calls==1U);
+    QueueTarget(2U,100U,1000U);CanLink_Poll();ExpectTarget(1U);
+    QueueQuery(4U,3U);CanLink_Poll();ExpectTime(4U,3U,0x806U);
+    QueueQuery(10U,4U);CanLink_Poll();ExpectTime(10U,4U,2U);
+    CHECK(target_calls==1U && can_link_error_count==0U && timeout_resets==1U);
+    CheckTimeLost(CAN_TIME_LOSS_TIMEOUT);
+}
+
 int main(int argc, char **argv)
 {
     CHECK(argc == 2);
@@ -915,6 +1491,13 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "stop-max-id")) StopMaxId();
     else if (!strncmp(argv[1], "stop-core-",10)) StopCore((unsigned)atoi(argv[1]+10));
     else if (!strcmp(argv[1], "stop-target-retained")) StopTargetRetained();
+    else if (!strcmp(argv[1], "stop-boot-retained")) StopBootRetained();
+    else if (!strncmp(argv[1], "boot-state-",11)) BootQueries((uint32_t)atoi(argv[1]+11));
+    else if (!strcmp(argv[1], "boot-rejects")) BootRejects();
+    else if (!strcmp(argv[1], "boot-dlc")) BootDlc();
+    else if (!strcmp(argv[1], "boot-missing")) BootMissing();
+    else if (!strcmp(argv[1], "boot-bad-provider")) BootBadProvider();
+    else if (!strncmp(argv[1], "boot-failure-",13)) BootFailure((unsigned)atoi(argv[1]+13));
     else if (!strcmp(argv[1], "target-valid")) TargetValid();
     else if (!strcmp(argv[1], "target-rejects")) TargetRejects();
     else if (!strcmp(argv[1], "target-dlc")) TargetDlc();
@@ -924,10 +1507,26 @@ int main(int argc, char **argv)
     else if (!strncmp(argv[1], "target-failure-",15)) TargetFailure((unsigned)atoi(argv[1]+15));
     else if (!strncmp(argv[1], "bad-config-", 11)) BadConfig((unsigned)atoi(argv[1] + 11));
     else if (!strncmp(argv[1], "init-fail-", 10)) InitFailure((unsigned)atoi(argv[1] + 10));
+    else if (!strcmp(argv[1], "time-normal")) TimeNormal();
+    else if (!strcmp(argv[1], "time-metadata")) TimeMetadata();
+    else if (!strcmp(argv[1], "time-progress")) TimeBoundedProgress();
+    else if (!strcmp(argv[1], "time-watch")) TimeWatch();
+    else if (!strcmp(argv[1], "time-nonfatal")) TimeNonfatal();
+    else if (!strcmp(argv[1], "time-core")) TimeCoreUntouched();
+    else if (!strcmp(argv[1], "stop-time-compatible")) StopTimeCompatible();
+    else if (!strncmp(argv[1], "time-sticky-",12)) TimeSticky((unsigned)atoi(argv[1]+12));
+    else if (!strncmp(argv[1], "time-init-fail-",15)) TimeInitFailure((unsigned)atoi(argv[1]+15));
+    else if (!strncmp(argv[1], "time-bad-effect-",16)) TimeBadEffect((unsigned)atoi(argv[1]+16));
+    else if (!strncmp(argv[1], "time-init-boundary-",19)) TimeInitBoundary((unsigned)atoi(argv[1]+19));
+    else if (!strncmp(argv[1], "time-config-",12)) TimeConfiguration((unsigned)atoi(argv[1]+12));
+    else if (!strncmp(argv[1], "time-geometry-",14)) TimeGeometry((unsigned)atoi(argv[1]+14));
+    else if (!strncmp(argv[1], "time-edge-",10)) TimeEdges((unsigned)atoi(argv[1]+10));
+    else if (!strncmp(argv[1], "time-failure-",13)) TimeRuntimeFailure((unsigned)atoi(argv[1]+13));
     else CHECK(0);
     if(strncmp(argv[1],"stop-",5)) CHECK(stop_calls==0U);
-    CHECK(ignored_stop_calls==0U && ignored_target_calls==0U);
-    if(strncmp(argv[1],"target-",7) && strcmp(argv[1],"stop-target-retained"))CHECK(target_calls==0U);
+    CHECK(ignored_stop_calls==0U && ignored_target_calls==0U && ignored_boot_reads==0U);
+    if(strncmp(argv[1],"boot-",5) && strcmp(argv[1],"stop-boot-retained"))CHECK(boot_reads==0U);
+    if(strncmp(argv[1],"target-",7) && strcmp(argv[1],"stop-target-retained") && strcmp(argv[1],"stop-time-compatible"))CHECK(target_calls==0U);
     printf("CAN service %s: %u assertions PASS\n", argv[1], checks);
     return 0;
 }

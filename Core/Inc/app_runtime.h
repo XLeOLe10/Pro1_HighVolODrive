@@ -27,6 +27,24 @@ extern volatile AppGapTrace app_gap_trace;
 extern volatile uint32_t app_stack_probe_enabled;
 #endif
 
+/* Startup identity: immutable after the single pre-scheduler attempt.
+ * Diagnostic mirrors are NOT authority; changing Watch values cannot create
+ * a valid identity. The getter returns the private state and four words, or
+ * four zeros when invalid. No RNG access, allocation, IRQ masking or retries. */
+#define APP_BOOT_STATE_NOT_READY 0U
+#define APP_BOOT_STATE_VALID     1U
+#define APP_BOOT_STATE_FAILED    2U
+#define APP_BOOT_ERROR_CONFIG    (1UL << 0)
+#define APP_BOOT_ERROR_CLOCK     (1UL << 1)
+#define APP_BOOT_ERROR_SEED      (1UL << 2)
+#define APP_BOOT_ERROR_TIMEOUT   (1UL << 3)
+#define APP_BOOT_ERROR_HAL       (1UL << 4)
+#define APP_BOOT_ERROR_REPEAT    (1UL << 5)
+#define APP_BOOT_ERROR_ZERO      (1UL << 6)
+extern volatile uint32_t app_boot_identity_state;
+extern volatile uint32_t app_boot_error_flags;
+uint32_t AppRuntime_GetBootIdentity(uint32_t words[4]);
+
 void AppRuntime_Init(void);           /* main, before scheduler */
 void AppRuntime_TaskStart(void);      /* appTask, once */
 void AppRuntime_BackgroundStep(void); /* appTask, once per scheduled period */

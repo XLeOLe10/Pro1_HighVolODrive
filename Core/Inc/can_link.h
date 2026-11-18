@@ -22,6 +22,29 @@ typedef struct {
 } CanLinkDiagnostics;
 extern volatile CanLinkDiagnostics can_link_diag;
 
+#define CAN_TIME_NOT_READY      0U
+#define CAN_TIME_TRACKING       1U
+#define CAN_TIME_LOST           2U
+#define CAN_TIME_LOSS_TIMEOUT   0x01U
+#define CAN_TIME_LOSS_CONFIG    0x02U
+#define CAN_TIME_LOSS_RX_LOST   0x04U
+#define CAN_TIME_LOSS_HAL       0x08U
+#define CAN_TIME_LOSS_LINK      0x10U
+#define CAN_TIME_TICK_US        32U
+#define CAN_TIME_SERVICE_TICKS  6250U
+
+typedef struct {
+    uint32_t state;
+    uint32_t reason_flags; /* Sticky CAN_TIME_LOSS_*; no runtime recovery. */
+    /* Last successful HAL dequeue's trusted age observation, not a running
+     * clock/current frame age. Empty polls retain it; invalid/unknown or direct
+     * non-8-DLC discard gives UINT32_MAX. This is never control permission. */
+    uint32_t last_rx_age_us;
+} CanLinkTimeDiagnostics;
+/* Writable debugger mirrors only. Private appTask state owns decisions and
+ * query values; editing these fields cannot restore trusted time. */
+extern volatile CanLinkTimeDiagnostics can_link_time_diag;
+
 #define CAN_LINK_ERROR_INIT       0x01U
 #define CAN_LINK_ERROR_RX_LOST    0x02U
 #define CAN_LINK_ERROR_PROTOCOL   0x04U
@@ -53,13 +76,19 @@ typedef uint32_t (*CanLinkStopRequester)(uint32_t *ticket);
 /* Read-only, appTask, bounded; returns one CAN_TARGET_CHECK_* wire status.
  * Must NOT publish/control/renew a command, or retain an approved target. */
 typedef uint8_t (*CanLinkTargetChecker)(int32_t speed_rpm, uint32_t iq_limit_ma);
+/* Read-only immutable boot identity, generated before tasks start. Returns
+ * 0=not ready, 1=valid, 2=failed; fills four words without waiting for RNG.
+ * Queries never refresh identity, authorize control or change a command. */
+typedef uint32_t (*CanLinkBootReader)(uint32_t words[4]);
 
 /* Bench-only, one startup call in appTask. No retry/recovery during this test. */
 void CanLink_Init(CanLinkStatusReader read_status, CanLinkStopRequester request_stop,
-                  CanLinkTargetChecker check_targets);
+                  CanLinkTargetChecker check_targets, CanLinkBootReader read_boot_identity);
 /* After resolver acquisition: <=1 receive, <=1 enqueue, no waits/heap.
  * STATUS/FAULT/STOP-result uses bounded PRIMASK copies, encoding/HAL outside.
  * Only one control producer per boot. STOP IDs never wrap; the latest accepted
- * ID/ticket is retained even if TX fails. Reboot clears this history. */
+ * ID/ticket is retained even if TX fails. Reboot clears this history.
+ * Healthy service reloads a hardware progress timer; this does not renew a
+ * motor-command lease. Timestamp/timeout observations never authorize control. */
 void CanLink_Poll(void);
 #endif

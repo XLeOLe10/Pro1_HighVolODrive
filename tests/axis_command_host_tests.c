@@ -46,6 +46,14 @@ static float FloatBits(uint32_t bits)
     return value;
 }
 
+static void CheckReceipt(const AxisCommandCore *c, uint32_t seq,
+                         uint32_t result, uint32_t cycle)
+{
+    CHECK(c->receipt.command_seq == seq);
+    CHECK(c->receipt.result == result);
+    CHECK(c->receipt.control_seq == cycle);
+}
+
 static void TestValidation(void)
 {
     AxisCommandLimits l = fixture;
@@ -54,6 +62,7 @@ static void TestValidation(void)
     uint32_t ticket, seq;
     CASE("validation/configuration/finite values");
     CHECK(sizeof(f) == 32U);
+    CHECK(sizeof(AxisCommandReceipt) == 12U);
     CHECK(AxisCommand_Validate(&l, &f, 100U) == AXIS_CMD_OK);
     l.confirmed = 0U;
     CHECK(AxisCommand_Validate(&l, &f, 100U) == AXIS_CMD_CONFIG_UNSET);
@@ -144,6 +153,7 @@ static void TestStop(void)
     CHECK(c.result == AXIS_CMD_STOPPED && c.run_epoch == epoch + 1U);
     CHECK(!c.active_valid && !c.pending_ready && !c.stop_pending);
     CHECK(c.result_seq == 1U && c.cancelled_seq == 2U);
+    CheckReceipt(&c, 2U, AXIS_CMD_STOPPED, c.control_seq);
     CHECK(c.stop_applied_ticket == t1);
     AxisCommand_Tick(&c, 151U, 0U, 1U);
     CHECK(c.run_epoch == epoch + 1U);
@@ -161,15 +171,18 @@ static void TestLifecycle(void)
     f = Frame(c.run_epoch, AXIS_CMD_UPDATE, 100U); Publish(&c, &f, 100U);
     AxisCommand_Tick(&c, 100U, 0U, 1U);
     CHECK(c.result == AXIS_CMD_NOT_RUNNING && !c.active_valid);
+    CheckReceipt(&c, 1U, AXIS_CMD_NOT_RUNNING, c.control_seq);
     f.opcode = AXIS_CMD_START; Publish(&c, &f, 100U);
     AxisCommand_Tick(&c, 100U, 0U, 0U);
     CHECK(c.result == AXIS_CMD_NOT_READY && !c.pending_ready && !c.active_valid);
+    CheckReceipt(&c, 2U, AXIS_CMD_NOT_READY, c.control_seq);
     AxisCommand_Tick(&c, 101U, 0U, 1U);
     CHECK(!c.active_valid); /* Readiness becoming true cannot auto-start. */
     Start(&c, 101U);
     f = Frame(c.run_epoch, AXIS_CMD_START, 102U); Publish(&c, &f, 102U);
     AxisCommand_Tick(&c, 102U, 0U, 1U);
     CHECK(c.result == AXIS_CMD_ALREADY_RUNNING && c.active.command_seq == 3U);
+    CheckReceipt(&c, 4U, AXIS_CMD_ALREADY_RUNNING, c.control_seq);
     AxisCommand_Revoke(&c, AXIS_CMD_NOT_READY);
     CHECK(!c.active_valid && c.run_epoch == 2U);
     AxisCommand_Revoke(&c, AXIS_CMD_NOT_READY);
@@ -197,12 +210,14 @@ static void TestTime(void)
     CHECK(AxisCommand_Validate(&fixture, &f, 100U + 0x80000000UL) == AXIS_CMD_EXPIRED);
     Publish(&c, &f, 100U); AxisCommand_Tick(&c, 150U, 0U, 1U);
     CHECK(c.result == AXIS_CMD_EXPIRED && !c.active_valid && c.run_epoch == 1U);
+    CheckReceipt(&c, 1U, AXIS_CMD_EXPIRED, c.control_seq);
     Start(&c, 200U);
     f = Frame(c.run_epoch, AXIS_CMD_UPDATE, 249U); Publish(&c, &f, 249U);
     CHECK(AxisCommand_NeedsDisarm(&c, 250U, 0U));
     AxisCommand_Tick(&c, 250U, 0U, 1U);
     CHECK(c.result == AXIS_CMD_EXPIRED && !c.active_valid && !c.pending_ready);
     CHECK(c.result_seq == 2U && c.cancelled_seq == 3U);
+    CheckReceipt(&c, 3U, AXIS_CMD_EXPIRED, c.control_seq);
     CHECK(c.run_epoch == 2U);
     AxisCommand_Tick(&c, 251U, 0U, 1U); CHECK(c.run_epoch == 2U);
     AxisCommand_Init(&c, &fixture);
@@ -256,9 +271,11 @@ static void TestSequences(void)
     c.pending.command_seq = 1U;
     AxisCommand_Tick(&c, 101U, 0U, 1U);
     CHECK(c.result == AXIS_CMD_BAD_SEQUENCE && c.active.command_seq == 1U);
+    CheckReceipt(&c, 2U, AXIS_CMD_BAD_SEQUENCE, c.control_seq);
     Publish(&c, &f, 101U); c.pending.command_seq = 0U;
     AxisCommand_Tick(&c, 101U, 0U, 1U);
     CHECK(c.result == AXIS_CMD_BAD_SEQUENCE);
+    CheckReceipt(&c, 3U, AXIS_CMD_BAD_SEQUENCE, c.control_seq);
     Publish(&c, &f, 101U); c.pending.run_epoch = 2U;
     AxisCommand_Tick(&c, 101U, 0U, 1U);
     CHECK(c.result == AXIS_CMD_STALE_EPOCH);
@@ -286,6 +303,201 @@ static void TestSequences(void)
     CHECK(c.exhausted && !c.active_valid && c.stop_applied_ticket == ticket);
 }
 
+static void TestReceiptRetention(void)
+{
+    AxisCommandCore c;
+    AxisCommandFrame f;
+    AxisCommandReceipt saved;
+    uint32_t seq, ticket;
+    CASE("receipt is installation history; acceptance/rejection/empty STOP do not erase it");
+    AxisCommand_Init(&c, &fixture);
+    CheckReceipt(&c, 0U, AXIS_CMD_OK, 0U);
+    AxisCommand_RequestStop(&c, &ticket);
+    AxisCommand_Tick(&c, 100U, 0U, 1U);
+    CheckReceipt(&c, 0U, AXIS_CMD_OK, 0U);
+    Start(&c, 100U);
+    CheckReceipt(&c, 1U, AXIS_CMD_APPLIED, c.applied_control_seq);
+    saved = c.receipt;
+    f = Frame(c.run_epoch, AXIS_CMD_UPDATE, 101U);
+    CHECK(Publish(&c, &f, 101U) == 2U);
+    CHECK(memcmp(&c.receipt, &saved, sizeof(saved)) == 0);
+    CHECK(AxisCommand_PublishValidated(&c, &f, 101U, 0U, &seq) == AXIS_CMD_BUSY);
+    CHECK(seq == 0U && c.result_seq == 0U);
+    CHECK(memcmp(&c.receipt, &saved, sizeof(saved)) == 0);
+    CHECK(AxisCommand_ValidateTargets(&fixture, 1.0f, 1.0f) == AXIS_CMD_OK);
+    CHECK(AxisCommand_Permitted(&c, 101U, 0U));
+    CHECK(AxisCommand_Guard(&c, 101U, 0U));
+    CHECK(memcmp(&c.receipt, &saved, sizeof(saved)) == 0);
+    AxisCommand_Tick(&c, 101U, 0U, 1U);
+    CheckReceipt(&c, 2U, AXIS_CMD_APPLIED, c.applied_control_seq);
+    saved = c.receipt; /* One slot: the preceding receipt is now replaced. */
+    AxisCommand_Revoke(&c, AXIS_CMD_NOT_READY);
+    CHECK(!c.active_valid && c.result == AXIS_CMD_NOT_READY);
+    CHECK(memcmp(&c.receipt, &saved, sizeof(saved)) == 0);
+    CHECK(AxisCommand_PublishValidated(&c, &f, 101U, 0U, &seq) == AXIS_CMD_STALE_EPOCH);
+    CHECK(seq == 0U && c.result_seq == 0U);
+    AxisCommand_RequestStop(&c, &ticket);
+    AxisCommand_Tick(&c, 102U, 0U, 1U);
+    CHECK(c.result_seq == 0U && c.result == AXIS_CMD_STOPPED);
+    CHECK(memcmp(&c.receipt, &saved, sizeof(saved)) == 0);
+    CHECK(!AxisCommand_Guard(&c, 102U, 1U));
+    CHECK(AxisCommand_PublishValidated(&c, &f, 102U, 0U, &seq) == AXIS_CMD_FAULT);
+    CHECK(memcmp(&c.receipt, &saved, sizeof(saved)) == 0);
+    AxisCommand_Init(&c, &fixture);
+    CheckReceipt(&c, 0U, AXIS_CMD_OK, 0U);
+}
+
+static void TestReceiptPendingRejections(void)
+{
+    static const uint32_t expected[] = {
+        AXIS_CMD_BAD_SEQUENCE, AXIS_CMD_BAD_SEQUENCE, AXIS_CMD_BAD_SEQUENCE,
+        AXIS_CMD_STALE_EPOCH, AXIS_CMD_UNSUPPORTED_MODE, AXIS_CMD_INVALID
+    };
+    AxisCommandCore c;
+    AxisCommandFrame f;
+    unsigned i;
+    CASE("pending failures are attributed to their allocated sequence, not a corrupt frame sequence");
+    for (i = 0U; i < sizeof(expected) / sizeof(expected[0]); i++)
+    {
+        AxisCommand_Init(&c, &fixture); Start(&c, 100U);
+        f = Frame(c.run_epoch, AXIS_CMD_UPDATE, 101U);
+        CHECK(Publish(&c, &f, 101U) == 2U);
+        switch (i)
+        {
+            case 0U: c.pending.command_seq = 0U; break;
+            case 1U: c.pending.command_seq = 1U; break;
+            case 2U: c.pending.command_seq = 0xffffffffUL; break;
+            case 3U: c.pending.run_epoch++; break;
+            case 4U: c.pending.control_mode = 99U; break;
+            default: c.pending.opcode = 99U; break;
+        }
+        AxisCommand_Tick(&c, 101U, 0U, 1U);
+        CheckReceipt(&c, 2U, expected[i], 2U);
+        CHECK(c.result == expected[i] && !c.pending_ready);
+        CHECK(c.active_valid && c.active.command_seq == 1U && c.applied_seq == 1U);
+        CHECK(c.result_seq == c.pending.command_seq); /* Legacy diagnostic unchanged. */
+    }
+}
+
+static void TestReceiptRevocations(void)
+{
+    static const uint32_t reasons[] = {
+        AXIS_CMD_FAULT, AXIS_CMD_EXHAUSTED, AXIS_CMD_CONFIG_UNSET,
+        AXIS_CMD_STALE_EPOCH, AXIS_CMD_EXPIRED, AXIS_CMD_NOT_READY, AXIS_CMD_STOPPED
+    };
+    AxisCommandCore c;
+    AxisCommandFrame f;
+    AxisCommandReceipt saved;
+    uint32_t ticket, now, fault, ready;
+    unsigned i, with_pending;
+    CASE("all revocations retain active history, or replace it with the newer pending cancellation");
+    for (with_pending = 0U; with_pending <= 1U; with_pending++)
+    {
+        for (i = 0U; i < sizeof(reasons) / sizeof(reasons[0]); i++)
+        {
+            AxisCommand_Init(&c, &fixture); Start(&c, 100U);
+            saved = c.receipt;
+            if (with_pending)
+            {
+                f = Frame(c.run_epoch, AXIS_CMD_UPDATE, 101U);
+                CHECK(Publish(&c, &f, 101U) == 2U);
+            }
+            now = 101U; fault = 0U; ready = 1U;
+            switch (reasons[i])
+            {
+                case AXIS_CMD_FAULT: fault = 1U; break;
+                case AXIS_CMD_EXHAUSTED: c.exhausted = 1U; break;
+                case AXIS_CMD_CONFIG_UNSET: c.config_valid = 0U; break;
+                case AXIS_CMD_STALE_EPOCH: c.active.run_epoch++; break;
+                case AXIS_CMD_EXPIRED: now = 150U; break;
+                case AXIS_CMD_NOT_READY: ready = 0U; break;
+                default: AxisCommand_RequestStop(&c, &ticket); break;
+            }
+            AxisCommand_Tick(&c, now, fault, ready);
+            CHECK(!c.active_valid && !c.pending_ready && c.result == reasons[i]);
+            CHECK(c.result_seq == 1U && c.applied_seq == 1U);
+            if (with_pending)
+            {
+                CheckReceipt(&c, 2U, reasons[i], 2U);
+                CHECK(c.cancelled_seq == 2U);
+            }
+            else CHECK(memcmp(&c.receipt, &saved, sizeof(saved)) == 0);
+            saved = c.receipt;
+            AxisCommand_RequestStop(&c, &ticket);
+            AxisCommand_Tick(&c, now, fault, ready);
+            CHECK(c.stop_applied_ticket == ticket);
+            CHECK(memcmp(&c.receipt, &saved, sizeof(saved)) == 0);
+        }
+    }
+}
+
+static void TestReceiptFaultStopAndFinalGuard(void)
+{
+    AxisCommandCore c;
+    AxisCommandFrame f;
+    AxisCommandReceipt saved;
+    uint32_t ticket, seq, cycle;
+    unsigned with_active;
+    CASE("fault outranks simultaneous STOP for pending receipt; final guard does not invent a new cycle");
+    for (with_active = 0U; with_active <= 1U; with_active++)
+    {
+        AxisCommand_Init(&c, &fixture);
+        if (with_active) Start(&c, 100U);
+        f = Frame(c.run_epoch, with_active ? AXIS_CMD_UPDATE : AXIS_CMD_START, 101U);
+        seq = Publish(&c, &f, 101U);
+        AxisCommand_RequestStop(&c, &ticket);
+        AxisCommand_Tick(&c, 101U, 1U, 1U);
+        CheckReceipt(&c, seq, AXIS_CMD_FAULT, with_active + 1U);
+        CHECK(c.result == AXIS_CMD_STOPPED && c.result_seq == 0U);
+        CHECK(c.cancelled_seq == seq && c.stop_applied_ticket == ticket);
+        saved = c.receipt;
+        AxisCommand_Tick(&c, 102U, 1U, 1U);
+        CHECK(memcmp(&c.receipt, &saved, sizeof(saved)) == 0);
+    }
+    AxisCommand_Init(&c, &fixture); Start(&c, 100U);
+    f = Frame(c.run_epoch, AXIS_CMD_UPDATE, 101U);
+    seq = Publish(&c, &f, 101U); cycle = c.control_seq;
+    CHECK(!AxisCommand_Guard(&c, 101U, 1U));
+    CheckReceipt(&c, seq, AXIS_CMD_FAULT, cycle);
+    CHECK(c.control_seq == cycle && c.applied_seq == 1U);
+}
+
+static void TestReceiptSequenceBounds(void)
+{
+    AxisCommandCore c;
+    AxisCommandFrame f;
+    AxisCommandReceipt saved;
+    uint32_t seq;
+    CASE("receipt sequence is nonzero/nonwrapping; control observation may wrap");
+    AxisCommand_Init(&c, &fixture); Start(&c, 100U);
+    f = Frame(c.run_epoch, AXIS_CMD_UPDATE, 101U);
+    CHECK(Publish(&c, &f, 101U) == 2U);
+    c.control_seq = 0xffffffffUL;
+    AxisCommand_Tick(&c, 101U, 0U, 1U);
+    CheckReceipt(&c, 2U, AXIS_CMD_APPLIED, 0U);
+    saved = c.receipt;
+    /* Fault-injected reappearing old mailbox must not rewrite its receipt. */
+    c.pending_ready = 1U; c.pending.command_seq = 0U;
+    AxisCommand_Tick(&c, 101U, 0U, 1U);
+    CHECK(c.result == AXIS_CMD_BAD_SEQUENCE);
+    CHECK(memcmp(&c.receipt, &saved, sizeof(saved)) == 0);
+    c.last_accepted_seq = 0xfffffffeUL;
+    CHECK(Publish(&c, &f, 101U) == 0xffffffffUL);
+    AxisCommand_Tick(&c, 101U, 0U, 1U);
+    CheckReceipt(&c, 0xffffffffUL, AXIS_CMD_APPLIED, 2U);
+    saved = c.receipt;
+    CHECK(AxisCommand_PublishValidated(&c, &f, 101U, 0U, &seq) == AXIS_CMD_EXHAUSTED);
+    CHECK(seq == 0U && c.exhausted);
+    AxisCommand_Tick(&c, 101U, 0U, 1U);
+    CHECK(!c.active_valid && memcmp(&c.receipt, &saved, sizeof(saved)) == 0);
+    AxisCommand_Init(&c, &fixture);
+    /* No accepted allocation: do not manufacture a nonzero receipt. */
+    c.pending = Frame(c.run_epoch, AXIS_CMD_START, 100U); c.pending_ready = 1U;
+    AxisCommand_Tick(&c, 100U, 0U, 1U);
+    CHECK(c.result == AXIS_CMD_BAD_SEQUENCE);
+    CheckReceipt(&c, 0U, AXIS_CMD_OK, 0U);
+}
+
 static void TestIq(void)
 {
     AxisCommandCore c;
@@ -311,6 +523,8 @@ int main(void)
 {
     TestValidation(); TestGroupsAndBusy(); TestStop(); TestLifecycle();
     TestTime(); TestFault(); TestSequences(); TestIq();
+    TestReceiptRetention(); TestReceiptPendingRejections(); TestReceiptRevocations();
+    TestReceiptFaultStopAndFinalGuard(); TestReceiptSequenceBounds();
     printf("PASS: %u scenarios, %u assertions; synthetic HOST limits only.\n", cases, assertions);
     puts("Boundary: sequential core tests do not prove Cortex-M7 PRIMASK timing or physical PWM safety.");
     return 0;

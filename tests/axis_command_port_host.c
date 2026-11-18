@@ -378,16 +378,266 @@ static void TestPrecheckCannotPublishOrRenew(void)
 }
 #endif
 
+static AxisCommandReceipt Receipt(void)
+{
+    AxisCommandReceipt out;
+    CHECK(AxisCommandPort_GetReceipt(&out) == AXIS_CMD_OK);
+    return out;
+}
+
+static void TestReceiptContextsAndMask(void)
+{
+    AxisCommandReceipt out, before, empty;
+    AxisCommandSnapshot state_before, state_after;
+    unsigned locked, safety_before;
+    Reset();
+    CHECK(sizeof(AxisCommandReceipt) == 12U && sizeof(AxisCommandSnapshot) == 72U);
+    memset(&out, 0xA5, sizeof(out)); before = out;
+    CHECK(AxisCommandPort_GetReceipt(NULL) == AXIS_CMD_INVALID);
+    host_ipsr = 25U;
+    CHECK(AxisCommandPort_GetReceipt(&out) == AXIS_CMD_INVALID);
+    CHECK(memcmp(&before, &out, sizeof(out)) == 0);
+    host_ipsr = 0U; kernel_state = osKernelInactive;
+    CHECK(AxisCommandPort_GetReceipt(&out) == AXIS_CMD_INVALID);
+    CHECK(memcmp(&before, &out, sizeof(out)) == 0);
+    kernel_state = osKernelRunning; current_thread = &wrong_token;
+    CHECK(AxisCommandPort_GetReceipt(&out) == AXIS_CMD_INVALID);
+    CHECK(memcmp(&before, &out, sizeof(out)) == 0);
+    CHECK(disables == 0U && barriers == 0U && restores == 0U && host_mask == 0U);
+    current_thread = appTaskHandle;
+    empty = Receipt();
+    CHECK(empty.command_seq == 0U && empty.result == 0U && empty.control_seq == 0U);
+    CHECK(host_mask == 0U && disables == 1U && barriers == 1U && restores == 1U);
+    host_mask = 1U; out = Receipt();
+    CHECK(host_mask == 1U && memcmp(&empty, &out, sizeof(out)) == 0);
+    CHECK(disables == 2U && barriers == 2U && restores == 2U && irq_calls == 0U);
+    host_mask = 0U;
+    state_before = Snapshot(); locked = disables; safety_before = safety_calls;
+    out = Receipt(); before = Receipt();
+    CHECK(memcmp(&out, &before, sizeof(out)) == 0);
+    CHECK(disables == locked + 2U && barriers == disables && restores == disables);
+    CHECK(safety_calls == safety_before && board_output_enabled == 0U && board_fault_mask == 0U);
+    state_after = Snapshot();
+    CHECK(memcmp(&state_before, &state_after, sizeof(state_before)) == 0);
+}
+
+#if AXIS_COMMAND_BENCH_ENABLE
+static void CheckReceiptUnchanged(const AxisCommandReceipt *expected)
+{
+    AxisCommandReceipt actual = Receipt();
+    CHECK(memcmp(expected, &actual, sizeof(actual)) == 0);
+}
+
+static void TestReceiptAppliedAndReplaced(void)
+{
+    AxisCommandFrame f;
+    AxisCommandReceipt first, second;
+    AxisCommandSnapshot before, after;
+    uint32_t seq_a, seq_b, rejected_seq = 99U, ticket;
+    unsigned safety_before;
+    Reset();
+    f = Frame(1U, AXIS_CMD_START, 100.0f, 1.0f, 500U);
+    CHECK(AxisCommandPort_Submit(&f, &seq_a) == AXIS_CMD_OK);
+    first = Receipt(); CHECK(first.command_seq == 0U); /* Accepted is not applied. */
+    RequestIrq(); first = Receipt();
+    CHECK(first.command_seq == seq_a && first.result == AXIS_CMD_APPLIED && first.control_seq == 1U);
+    before = Snapshot(); safety_before = safety_calls;
+    CheckReceiptUnchanged(&first); CheckReceiptUnchanged(&first);
+    /* Existing debugger mirrors cannot replace the private completion record. */
+    axis_command_result = AXIS_CMD_FAULT; axis_command_result_seq = 0xFFFFFFFFU;
+    axis_command_applied_seq = 0U; axis_command_control_seq = 0U;
+    CheckReceiptUnchanged(&first);
+    after = Snapshot(); CHECK(memcmp(&before, &after, sizeof(before)) == 0);
+    CHECK(safety_calls == safety_before && board_fault_mask == 0U);
+    f = Frame(1U, AXIS_CMD_UPDATE, -200.0f, 0.5f, 500U);
+    CHECK(AxisCommandPort_Submit(&f, &seq_b) == AXIS_CMD_OK);
+    CheckReceiptUnchanged(&first); /* A new pending frame does not clear history. */
+    CHECK(AxisCommandPort_Submit(&f, &rejected_seq) == AXIS_CMD_BUSY && rejected_seq == 0U);
+    CheckReceiptUnchanged(&first);
+    RequestIrq(); second = Receipt();
+    CHECK(second.command_seq == seq_b && second.result == AXIS_CMD_APPLIED && second.control_seq == 2U);
+    CHECK(AxisCommandPort_Stop(&ticket) == AXIS_CMD_OK); RequestIrq();
+    CheckReceiptUnchanged(&second);
+    CHECK(AxisCommandPort_Stop(&ticket) == AXIS_CMD_OK); RequestIrq();
+    CheckReceiptUnchanged(&second); /* Empty STOP cannot erase the completed UPDATE. */
+    CHECK(AxisCommandPort_Submit(&f, &rejected_seq) == AXIS_CMD_STALE_EPOCH && rejected_seq == 0U);
+    CheckReceiptUnchanged(&second);
+    after = Snapshot();
+    CHECK(after.active_valid == 0U && after.permit == 0U && after.applied_seq == seq_b);
+    CHECK(after.stop_applied_ticket == ticket && after.control_seq > second.control_seq);
+}
+
+static void TestReceiptActiveLoss(void)
+{
+    unsigned mode;
+    for (mode = 0U; mode < 3U; ++mode)
+    {
+        AxisCommandFrame f;
+        AxisCommandReceipt applied;
+        AxisCommandSnapshot state;
+        uint32_t seq;
+        unsigned safety_before;
+        Reset(); f = Frame(1U, AXIS_CMD_START, 100.0f, 1.0f, 500U);
+        CHECK(AxisCommandPort_Submit(&f, &seq) == AXIS_CMD_OK); RequestIrq();
+        applied = Receipt();
+        board_output_enabled = 1U; /* CPU model only; no real output operation. */
+        safety_before = safety_calls;
+        if (mode == 0U) { host_now = 500U; RequestIrq(); }
+        else if (mode == 1U)
+        {
+            board_fault_mask = 8U; host_ipsr = 25U;
+            CHECK(AxisCommandPort_FinalPermit(host_now) == 0U); host_ipsr = 0U;
+        }
+        else
+        {
+            host_ipsr = 25U;
+            CHECK(AxisCommandPort_BeginCycle(host_now, 0U) == NULL);
+            CHECK(AxisCommandPort_FinalPermit(host_now) == 0U); host_ipsr = 0U;
+        }
+        CheckReceiptUnchanged(&applied);
+        state = Snapshot();
+        CHECK(state.active_valid == 0U && state.permit == 0U && state.applied_seq == seq);
+        CHECK(state.result == (mode == 0U ? AXIS_CMD_EXPIRED :
+                              (mode == 1U ? AXIS_CMD_FAULT : AXIS_CMD_NOT_READY)));
+        CHECK(safety_calls > safety_before && board_output_enabled == 0U);
+        RequestIrq(); CheckReceiptUnchanged(&applied);
+    }
+}
+
+static void TestReceiptRejectedAndRetained(void)
+{
+    AxisCommandFrame f;
+    AxisCommandReceipt rejected;
+    AxisCommandSnapshot state;
+    uint32_t seq, rejected_seq, ticket;
+    Reset(); f = Frame(1U, AXIS_CMD_UPDATE, 100.0f, 1.0f, 500U);
+    CHECK(AxisCommandPort_Submit(&f, &seq) == AXIS_CMD_OK); RequestIrq();
+    rejected = Receipt();
+    CHECK(rejected.command_seq == seq && rejected.result == AXIS_CMD_NOT_RUNNING && rejected.control_seq == 1U);
+    CHECK(AxisCommandPort_Stop(&ticket) == AXIS_CMD_OK); RequestIrq();
+    CheckReceiptUnchanged(&rejected);
+    f = Frame(AxisCommandPort_GetEpoch(), AXIS_CMD_START, 100.0f, 1.0f, 500U);
+    CHECK(AxisCommandPort_Submit(&f, &seq) == AXIS_CMD_OK);
+    host_ipsr = 25U;
+    CHECK(AxisCommandPort_BeginCycle(host_now, 0U) == NULL);
+    CHECK(AxisCommandPort_FinalPermit(host_now) == 0U); host_ipsr = 0U;
+    rejected = Receipt();
+    CHECK(rejected.command_seq == seq && rejected.result == AXIS_CMD_NOT_READY && rejected.control_seq == 3U);
+    f.run_epoch = 1U;
+    CHECK(AxisCommandPort_Submit(&f, &rejected_seq) == AXIS_CMD_STALE_EPOCH && rejected_seq == 0U);
+    CheckReceiptUnchanged(&rejected);
+    CHECK(AxisCommandPort_Stop(&ticket) == AXIS_CMD_OK); RequestIrq();
+    CheckReceiptUnchanged(&rejected);
+    state = Snapshot(); CHECK(state.result == AXIS_CMD_STOPPED && state.applied_seq == 0U);
+
+    Reset(); f = Frame(1U, AXIS_CMD_START, 100.0f, 1.0f, 500U);
+    CHECK(AxisCommandPort_Submit(&f, &seq) == AXIS_CMD_OK); RequestIrq();
+    CHECK(AxisCommandPort_Submit(&f, &seq) == AXIS_CMD_OK); RequestIrq();
+    rejected = Receipt();
+    CHECK(rejected.command_seq == seq && rejected.result == AXIS_CMD_ALREADY_RUNNING && rejected.control_seq == 2U);
+    CHECK(AxisCommandPort_Stop(&ticket) == AXIS_CMD_OK); RequestIrq();
+    CheckReceiptUnchanged(&rejected); /* Revoking old active A must not overwrite rejected B. */
+    state = Snapshot(); CHECK(state.active_valid == 0U && state.applied_seq != seq);
+}
+
+static void TestReceiptPendingCancellation(void)
+{
+    unsigned mode;
+    for (mode = 0U; mode < 6U; ++mode)
+    {
+        AxisCommandFrame f;
+        AxisCommandReceipt receipt;
+        AxisCommandSnapshot state;
+        uint32_t active_seq = 0U, pending_seq, ticket = 0U;
+        uint32_t reason = (mode < 2U) ? AXIS_CMD_STOPPED :
+                          ((mode == 2U || mode == 5U) ? AXIS_CMD_FAULT :
+                           (mode == 3U ? AXIS_CMD_EXPIRED : AXIS_CMD_NOT_READY));
+        Reset();
+        if (mode != 0U && mode != 5U)
+        {
+            f = Frame(1U, AXIS_CMD_START, 100.0f, 1.0f, 500U);
+            CHECK(AxisCommandPort_Submit(&f, &active_seq) == AXIS_CMD_OK); RequestIrq();
+        }
+        if (mode == 3U) host_now = 499U; /* Pending B is fresh when active A expires. */
+        f = Frame(1U, active_seq ? AXIS_CMD_UPDATE : AXIS_CMD_START, -100.0f, 0.5f, 500U);
+        CHECK(AxisCommandPort_Submit(&f, &pending_seq) == AXIS_CMD_OK);
+        receipt = Receipt(); CHECK(receipt.command_seq == active_seq);
+        if (mode < 3U) CHECK(AxisCommandPort_Stop(&ticket) == AXIS_CMD_OK);
+        if (mode == 2U || mode == 5U) board_fault_mask = 8U;
+        if (mode == 3U) host_now = 500U;
+        if (mode == 4U)
+        {
+            host_ipsr = 25U;
+            CHECK(AxisCommandPort_BeginCycle(host_now, 0U) == NULL);
+            CHECK(AxisCommandPort_FinalPermit(host_now) == 0U); host_ipsr = 0U;
+        }
+        else RequestIrq();
+        receipt = Receipt(); state = Snapshot();
+        CHECK(receipt.command_seq == pending_seq && receipt.result == reason);
+        CHECK(receipt.control_seq == state.control_seq);
+        CHECK(state.applied_seq == active_seq && state.cancelled_seq == pending_seq);
+        CHECK(state.active_valid == 0U && state.permit == 0U && board_output_enabled == 0U);
+        if (mode < 3U) CHECK(state.stop_applied_ticket == ticket);
+        CHECK(AxisCommandPort_Stop(&ticket) == AXIS_CMD_OK); RequestIrq();
+        CheckReceiptUnchanged(&receipt);
+    }
+}
+
+static void TestReceiptDeferredInterrupt(void)
+{
+    AxisCommandFrame f;
+    AxisCommandReceipt first, observed, second, rejected;
+    uint32_t seq_a, seq_b, seq_c;
+    Reset(); f = Frame(1U, AXIS_CMD_START, 100.0f, 1.0f, 500U);
+    CHECK(AxisCommandPort_Submit(&f, &seq_a) == AXIS_CMD_OK); RequestIrq(); first = Receipt();
+    f = Frame(1U, AXIS_CMD_UPDATE, -100.0f, 0.5f, 500U);
+    CHECK(AxisCommandPort_Submit(&f, &seq_b) == AXIS_CMD_OK);
+    inject_on_disable = 1U; observed = Receipt();
+    CHECK(memcmp(&first, &observed, sizeof(first)) == 0);
+    CHECK(host_mask == 0U && irq_pending == 0U && irq_calls == 2U);
+    second = Receipt();
+    CHECK(second.command_seq == seq_b && second.result == AXIS_CMD_APPLIED && second.control_seq == 2U);
+    f = Frame(1U, AXIS_CMD_START, 200.0f, 2.0f, 500U);
+    CHECK(AxisCommandPort_Submit(&f, &seq_c) == AXIS_CMD_OK);
+    inject_on_disable = 1U; observed = Receipt();
+    CHECK(memcmp(&second, &observed, sizeof(second)) == 0);
+    CHECK(host_mask == 0U && irq_pending == 0U && irq_calls == 3U);
+    rejected = Receipt();
+    CHECK(rejected.command_seq == seq_c && rejected.result == AXIS_CMD_ALREADY_RUNNING && rejected.control_seq == 3U);
+    CHECK(disables == barriers && barriers == restores);
+}
+#else
+static void TestReceiptNormalProfile(void)
+{
+    AxisCommandFrame f;
+    AxisCommandReceipt empty, after;
+    uint32_t seq, ticket;
+    Reset(); empty = Receipt();
+    f = Frame(1U, AXIS_CMD_START, 100.0f, 1.0f, 500U);
+    CHECK(AxisCommandPort_Submit(&f, &seq) == AXIS_CMD_CONFIG_UNSET && seq == 0U);
+    CHECK(AxisCommandPort_Stop(&ticket) == AXIS_CMD_OK); RequestIrq();
+    after = Receipt();
+    CHECK(memcmp(&empty, &after, sizeof(empty)) == 0 && after.command_seq == 0U);
+}
+#endif
+
 int main(void)
 {
     TestContextsAndMask();
+    TestReceiptContextsAndMask();
     TestTargetPrecheck();
 #if AXIS_COMMAND_BENCH_ENABLE
     TestRealPublicationAndSnapshot();
+    TestReceiptAppliedAndReplaced();
+    TestReceiptActiveLoss();
+    TestReceiptRejectedAndRetained();
+    TestReceiptPendingCancellation();
+    TestReceiptDeferredInterrupt();
     TestFaultsAndExpiry();
     TestPrecheckCannotPublishOrRenew();
 #else
     TestNormalProfile();
+    TestReceiptNormalProfile();
 #endif
     printf("PASS: %u real command port assertions (BENCH=%u); deterministic CPU stubs only\n",
            assertions, (unsigned)AXIS_COMMAND_BENCH_ENABLE);

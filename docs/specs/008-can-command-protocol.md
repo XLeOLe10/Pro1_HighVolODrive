@@ -1,27 +1,26 @@
 # 008 — CAN命令：ODrive对照与接入方案
 
-**一句话：** STOP已提交；本轮加入同一帧里的速度/Iq整组参数预检和回显，通过仅表示范围合格，不授予启动许可。
+**一句话：** 008.06已接入CAN硬件接收时间戳与服务长停检测，为后续命令期限提供时间依据；仍未接CAN START/UPDATE。
 
-**实施状态（2026-11-17）：008.03预检已实现，SRC/HOST/BUILD通过，正常低频禁输出HW PASS（有限，用户反馈见9.7）。** 基线`Xiao_ODrive / 98f736d`＋本轮工作区差异。008.01查询、008.02 STOP及其历史板测在第6–8节；本轮看第9节。会话与报文新鲜度尚未闭合，因此没有把预检直接接到START/UPDATE；范围调整原因与后续合同见9.3。
+**实施状态（2026-11-18）：008.06已实现，SRC/HOST/两目标增量BUILD通过，HW PASS（有限）。** 基线`Xiao_ODrive / 30aa8d1`＋008.04–06工作区。CCFG/年龄有截图，20秒正常轮及暂停/复位状态按用户文字确认；详细证据边界见12.6。008.05内部回执/耗时仍未板验。
 
-| 部位 | 本轮实际变化 | 边界 |
+| 部位 | 改前 → 改后 | 边界 |
 | --- | --- | --- |
-| 线路字段 | 单帧速度signed16 rpm＋Iq unsigned16 mA | 字段成对解码，不拆包、不偷偷限幅 |
-| 参数检查 | 从既有命令规则抽取共享ValidateTargets | 复用同一静态限值，不复制一套阈值 |
-| CAN业务 | 增加预检/原参数回显 | 重复只重验，不提交/续期或缓存运行命令 |
-| 控制写入 | STOP仍是唯一CAN控制请求 | 自动Bench仍停用，START/UPDATE未接入 |
-| 文件组织 | 9个已有固件文件＋5个已有测试文件 | 新增源/头文件0，沿用008文档和证据 |
+| 接收时间 | 没有帧年龄 → RxTimestamp/TSCV硬件差值 | 标称32µs/计数，年龄观察不是运行许可 |
+| 服务停顿 | 不识别多圈长停 → TOO粘滞失信、至复位不恢复 | 约200ms是服务间隔预算，不是电机失联期限 |
+| 诊断与协议 | 增加独立时间镜像、只读0A/0B；BUILD008.06 | INFO0x101FF；私有状态权威，旧健康链路诊断保留 |
+| 集成与内存 | 扩展原CAN模块/测试，新文件和任务0 | Bench实际ROM＋1084 B、静态RAM＋24 B；普通目标不变 |
 
-| 验收层级 | 当前状态 | 依据/限制 |
+| 验收层级 | 本次008.06状态 | 证据 |
 | --- | --- | --- |
-| SRC | PASS | 独立复核参数校验等价、整组/字节转换、无控制副作用、上下文错误映射 |
-| BUILD | PASS | 两个目标增量0错误0警告；原始日志/最终指纹追加到008记录 |
-| HOST协议/服务 | PASS | 70347断言；58场景2475断言，含STOP/预检交错 |
-| HOST核心/端口/安全 | PASS | core203＋FOC407；端口/演练/安全431断言＋9配置组合 |
-| HW 008.03预检 | PASS（有限） | 用户确认BUILD008.03、合法/越界结果01/02及三项Watch为0；无新回包截图/板端镜像hash回读，见9.7 |
-| HW历史STOP | PASS（有限） | 第8.6–8.7节；已提交98f736d，不含物理停车/最坏时序 |
+| SRC | PASS（有限） | 初始化/读清顺序、队列进展、私有状态与独立审查 |
+| 实现 | 已实现 | 时间配置/检查/出队年龄、两条只读查询 |
+| BUILD / 编译期检查 | PASS | 两目标增量0错误0警告；9×6250＋16<65536静态边界 |
+| HOST | PASS | 协议89573断言；实际服务147场景12116断言，真实HAL/CPU用桩 |
+| HW | PASS（有限） | CCFG/年龄截图＋20秒正常轮、暂停/复位状态的用户文字确认；806版本/板端指纹无独立新证据，计时精度/最坏开销未测，见12.6 |
+| 历史008.05 | 版本冒烟PASS（有限） | 用户文字确认805回包；内部处理/临界区耗时HW仍NOT_RUN |
 
-**下一步：** 1. 用户提交008.03检查点（固件9、测试5、文档/证据4）；2. 进入会话/新鲜度/结果保留合同；3. 在禁输出目标接入并验收START/UPDATE。原始日志见[008记录](../validation/008-can-query-20261116.txt)，当前分工见[架构](../ARCHITECTURE.md)。
+**下一步：** 1. 用户手动提交本检查点；2. 实现10.7完整事务＋发布/消费/最终许可期限；3. 在禁输出Bench联调CAN START/UPDATE。原始证据继续追加[008验证记录](../validation/008-can-query-20261116.txt)。
 
 ## 1. 参考版本与协议含义
 
@@ -97,7 +96,7 @@
 | STOP | 不受未确认运行配置或普通邮箱满限制地请求撤许可；返回停止票据和处理结果 | 已有AxisCommandPort_Stop；不是普通START/UPDATE槽，也不是即时总线硬急停 |
 | START_SPEED | 明确开始新一轮速度运行：目标rpm、Iq上限A、期限/身份 | 内部START已有；CAN解码、会话/序号关联未实现 |
 | UPDATE_SPEED | 在当前有效运行内整组更新目标/限制 | 内部UPDATE已有；不能从停机、到期或旧epoch恢复运行 |
-| GET_COMMAND_RESULT / 回执 | 关联请求：拒绝、接受、应用、取消、停止处理 | 已有内部序号/一致快照；可靠结果保留与重读语义未实现 |
+| GET_COMMAND_RESULT / 回执 | 关联请求：拒绝、接受、应用、取消、停止处理 | 008.05已有内部单条处理回执；CAN事务映射、缓存与重读仍待实施 |
 
 GET_INFO可报告已确认的运行上限；暂不另增一个运行时写限值命令。第一阶段只读，第二阶段先STOP再START/UPDATE，全部在禁输出目标验收。板上Watch按轮选3～4项，字段确定后再给测试清单。
 
@@ -439,3 +438,279 @@ Watch只保留三项：`axis_command_applied_seq`、`board_output_enabled`、`ap
 本次只更新4个已有文档/证据文件，新增0，未修改固件、重新编译、代提交或操作硬件。累计功能变更18项（固件9、测试5、文档/证据4），另有用户本地MDK-ARM/FOC_T.uvoptx设置改动，建议单独处理。建议提交消息：`feat: 接入 CAN 速度与 Iq 参数预检并完成禁输出台架检查`。
 
 下一阶段按9.3完成运行命令会话、排队年龄与过期、结果保留/重读合同，再在禁输出目标接入START/UPDATE；不把本轮预检token或PCAN重新连接直接作为运行授权。
+
+
+## 10. 启动身份与运行命令前置合同（008.04已实现身份查询，运行会话仍拟议）
+
+### 10.1 为什么先做启动身份
+
+复位会清空RAM序号和epoch，单独递增本次启动的序号不能区分上次启动留下的报文。UID是固定设备身份；DWT、HAL tick、RTOS tick会从头开始；仅清FIFO也不能清掉电脑稍后重发的旧请求。需要把“这次启动”与“上次启动”分开，再将该身份绑定到每笔完整运行事务。
+
+选择片内RNG产生四个uint32组成128位boot_id。同次启动固定，复位后重新生成；查询不更换身份，PCAN重新连接不自动获得运行许可。它针对意外重放/错配，属于依赖RNG正常工作的概率性区分，不能宣称绝对不重复、用户认证或防恶意控制。不采用固定值、UID/DWT混合或主机任意提供的session作为失效后备。
+
+掉电安全的持久启动计数也是备选，但需Flash原子日志、掉电恢复、磨损和不可回退规则，本阶段不引入。boot_id只是后续会话的一个组成部分；同次启动的停止/过期/故障等还需独立运行代次，不能让boot_id单独代表持续运行授权。
+
+### 10.2 生成前核查快照（历史，不代表008.04当前实现）
+
+下表保留用户启用RNG之前的审查依据；生成与集成结果见10.8，当前事实见架构页。
+
+| 已核对事实 | 文件/函数依据 | 对方案的影响 |
+| --- | --- | --- |
+| IOC未启用RNG，仅有RCC.RNGFreq_Value=48000000的计算值 | FOC_T.ioc的Mcu.IP列表、RCC项 | 48MHz文字不等于已开振荡器/外设 |
+| HAL_RNG_MODULE_ENABLED被注释，项目无hal_rng源/头及rng.c/h | Core/Inc/stm32h7xx_hal_conf.h；Drivers源清单 | 先补CubeMX生成配置，再接业务 |
+| 当前启动未打开HSI48、未调用MX_RNG_Init | Core/Src/main.c SystemClock_Config/main | RNG身份必须在启动时初始化完成后才可发布 |
+| 芯片支持RNG使用HSI48、共享HASH_RNG_IRQn | 本地stm32h7xx_hal_rcc_ex.h、stm32h750xx.h | 选独立HSI48，无需改控制PLL，不启RNG中断 |
+| 同版本HAL包已有RNG驱动 | STM32Cube_FW_H7_V1.12.1/Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_rng.c | 采用匹配版本；Init/GenerateRandomNumber超时依赖HAL tick |
+| H750无RNG_CR_CONDRST分支，HAL取数并非完整健康证明 | 同版本HAL_RNG_GenerateRandomNumber；本地H750设备头 | 包装层还须在取数前后检查时钟/种子错误，不能只看HAL_OK |
+
+该次生成前只读审查以当时工作区为准，用户MDK-ARM/FOC_T.uvoptx设置单独保留；后续生成与本轮实现的差异不混为当时现状。参考依据为[ST RM0433的RCC/RNG章节](https://www.st.com/resource/en/reference_manual/rm0433-stm32h742-stm32h743753-and-stm32h750-value-line-advanced-armbased-32bit-mcus-stmicroelectronics.pdf)及本地同版本HAL；写取数代码前继续核对芯片修订适用的错误处理要求。
+
+### 10.3 用户的CubeMX配置清单（已生成并核对）
+
+用户已完成本表配置和生成。CubeMX 6.16数据库默认RNG时钟为HSI48、CED为Enable，并按RNG使用关系自动生成HSI48开启；缺少显式IOC默认字段不等于漏配。本轮main.c/rng.c已验证实际生成结果。
+
+| 页面/项目 | 本轮目标 | 生成后核对点 |
+| --- | --- | --- |
+| RNG / Mode | Activated | Mcu.IP列表包含RNG，出现MX_RNG_Init |
+| RCC / HSI48 | 开启内部48MHz振荡器 | SystemClock_Config的HSI48State为ON；不是只修改显示频率 |
+| Clock Configuration / RNG Clock Mux | HSI48，RNG kernel为48MHz | RCC_RNGCLKSOURCE_HSI48；RNG外设时钟使能 |
+| RNG / Clock Error Detection（若界面有此项） | Enable | hrng.Init.ClockErrorDetection使用RNG_CED_ENABLE |
+| NVIC / HASH and RNG global interrupt | 不勾选 | 不新增NVIC使能/优先级，本阶段采用启动期轮询 |
+| DMA / 外部GPIO | 不配置 | RNG生成数据不需要外部接线、DMA池或Cache维护 |
+
+保持现有SYSCLK/CPU/HCLK 200MHz、FDCAN源HSE25MHz与500k位时序、SPI123源HSI64MHz、USART16源PCLK2 100MHz，以及TIM1/TIM7/ADC/FreeRTOS配置。RNG HSI48时钟选择由RM0433和本地RCC HAL支持；RNG时钟错误检测要求也要满足，不能用LSE/LSI等低频源直接替换。
+
+操作：打开当前FOC_T.ioc，按表配置、保存并Generate Code。当前30aa8d1是回退基线，不需复制整个工程。生成后先核对差异并接入业务代码，暂不将仅生成的工程下载为008.04。检查CubeMX是否保留USER CODE、自定义源文件、FOC_T与FOC_T_CommandBench两目标及Bench禁输出宏。该流程是配置/集成步骤，不是额外spec审批关口。
+
+文件组织：允许CubeMX按现有风格生成单一外设rng.c/h及必要HAL库文件；启动身份业务仍放app_runtime，字节格式放can_link_protocol，查询服务放can_link，不新增“每条命令一套源/头文件”。不手写替换生成器管理的RNG配置，不为这个阶段新增任务。
+
+### 10.4 身份生命周期、所有权与失败行为（已实现）
+
+- 在外设初始化后、启动调度器/TIM1控制中断前，app_runtime的InitBootIdentity最多调用HAL取数五次：首字仅作比较参考，后四字是候选身份。每次前后检查CECS/CEIS/SECS/SEIS、HAL返回/状态/错误码；按RM0433建议拒绝每个零字，另保守拒绝相邻重复。全部成功才发布私有boot_identity_words和VALID；失败不暴露部分候选、不重试。
+- 查询只能看到完整有效身份或明确无效状态，不对每个查询重新取随机数；四字发布发生在调度启动前，此后身份不可变，不用volatile冒充同步。
+- 状态为0=NOT_READY、1=VALID、2=FAILED；无效时Getter和CAN四字查询都返回0。app_boot_identity_state/app_boot_error_flags是Watch镜像，查询以私有状态为准，修改镜像不能制造有效身份。保留错误类别，不清除board_fault_mask。
+- 最多五次HAL取数、无重试。HAL超时判据为tick差大于2 ms，依赖TIM7/HAL tick正常运行，不是独立硬截止时间；调用前核PRIMASK/IPSR和RNG配置。正常启动链在BASEPRI/FAULTMASK默认0且TIM7运行的条件下使用，不能扩展为任意中断屏蔽/停时钟下的保证。失败不退回固定身份，不建立未来运行会话，不提交命令。
+- RNG取数失败时，若系统其余初始化可完成，保留旧PING/查询/STOP诊断能力；但CubeMX生成的MX_RNG_Init或系统时钟初始化可能调用Error_Handler进入Fatal。实现时明确区分这两条路径，不能无条件承诺所有RNG/振荡器故障下CAN仍可用。
+- 不在TIM1 ISR、1ms周期业务或查询处理里阻塞等待RNG；数据放静态CPU RAM，由app_runtime提供只读接口。新增16B身份及少量状态，不需要DMA。
+- 本步没有运行会话或接受START/UPDATE；所谓“身份失败拒绝”是后续会话必须遵守的前置条件，不宣称本步已实现完整防重放。
+
+### 10.5 只读线路合同（008.04已实现）
+
+沿用标准321请求/322回复、DLC8、500 kbit/s。沿既有查询格式：请求`51 01 opcode token 00 00 00 00`，回复`52 01 opcode token value_u32_LE`。
+
+| 新增opcode | 值 |
+| --- | --- |
+| 0x05 BOOT_STATE | 0=NOT_READY，1=VALID，2=FAILED |
+| 0x06 BOOT_WORD0 | boot_id[0]，四字组成的编号按明确顺序保存 |
+| 0x07 BOOT_WORD1 | boot_id[1] |
+| 0x08 BOOT_WORD2 | boot_id[2] |
+| 0x09 BOOT_WORD3 | boot_id[3] |
+
+008.04时BUILD=0x00000804、INFO=0x000100FF（本节为历史008.04合同；当前008.06新增0A/0B，见第12节），新增bit7表示启动身份查询能力；能力位不表示身份当前有效。版本是手工接口版本，不是固件指纹。
+
+boot_id是完整128位；查询四次只是传输分页，不能拿某个32位字当完整会话身份。若查询中板子复位，电脑可能得到跨启动混合页，不能据这些页直接授权；后续握手/提交必须回到板端验证完整身份并绑定参数。token只配对查询，仍不续期。
+
+### 10.6 最少验收合同（008.04 HOST/BUILD通过，两轮HW有限通过，见10.8）
+
+1. HOST：四字成功才VALID；参考字或候选字任一步失败/时钟或种子错误/超时/零字/相邻重复时无有效身份；查询不会取新数、Submit、Stop或更改许可；旧PING/查询/STOP/预检回归。
+2. BUILD：两个Keil目标增量0错误0警告；新增RNG源/头和HAL启用项均可达，核对时钟、初始化顺序、RAM/栈和编译禁输出约束。普通目标仍无运行生产者，不把测试身份当作电机配置。
+3. 分轮板测：查状态及四字，同次启动重复查询应一致；用户复位后重新查询完整四字，应观察到新身份。少量复位变化不能证明随机质量或绝对不重复。
+4. 只看三项Watch：app_boot_identity_state、axis_command_applied_seq、board_output_enabled；应为有效、0、0。异常计数/时序有迹象时再分轮查看，不一口气加参数。
+5. 身份基础通过后再推进下节，仍不允许功率输出。
+
+### 10.7 START/UPDATE之前仍必须闭合的合同
+
+| 问题 | 已选设计约束 / 尚需实施 | 现有复用位置 |
+| --- | --- | --- |
+| 完整事务 | 会话必须绑定完整boot_id、运行代次、外部请求号、操作类型、完整速度/Iq与期限；当前8字节预检帧不够，不能把身份截短硬塞。具体多帧格式/绑定算法留到下一检查点固定 | can_link_protocol与can_link中的单个静态事务槽 |
+| 半更新和重放 | 同一请求内容不可变；同号同内容只重读，不重新发单/续期；同号异内容拒绝。未齐、过期或身份不符都不Submit。外部请求号与内部command_seq分开映射 | AxisCommandPort_Submit / AxisCommand_PublishValidated |
+| 排队年龄 | 008.06已实现RxTimestamp＋CONTINUOUS Timeout粘滞与有界队列进展的年龄观察，见第12节。SOF到达时刻不能用出队/最后分片替代；下一步还须把首分片时刻/期限贯穿控制交接 | CanLink_Init/Poll/ObserveRxAge；后续事务槽 |
+| 发布后的长停 | 出队检查后可能再次被抢占/调试暂停；原始时间与截止条件须贯穿发布、TIM1消费及最终许可。HAL tick由TIM7 IRQ推动，暂停丢失的周期不能靠恢复后重新计时补救 | AxisCommandPort_Submit/BeginCycle/FinalPermit；app_runtime |
+| 超时守卫 | 008.06已解除FDCAN调试冻结并保留TOO，失信后只使年龄无效；运行会话/事务撤销和TIM1门禁尚未接入，不能称失联停车已完成 | CanLink时间状态；后续BeginCycle/FinalPermit；时钟停摆/调试器任意改寄存器不属已保证边界 |
+| 可靠结果 | 008.05已实现core单条处理回执与独立12 B GetReceipt（第11节），旧Snapshot保持72 B。CAN仍须至多一条尚未确认终态的普通请求，读取并缓存前单结果后再接下一笔；结果重读线路尚未实现 | AxisCommand_Tick/Revoke；AxisCommandPort_GetReceipt；后续can_link结果缓存 |
+| 执行含义 | ACCEPTED=进入pending；APPLIED=指定seq曾被TIM1安装；当前是否仍运行要另看active_valid/permit/到期。取消和故障不能伪装成APPLIED，参数通过更不是APPLIED | applied_seq/applied_control_seq/cancelled_seq |
+| 停止与失效 | STOP/到期/故障使旧UPDATE失效；恢复通信不能自动续期或启动。新增自动STOP来源会破坏现有票据次数上界假设，须改合同或走TIM1撤许可路径，不能悄悄复用 | BeginCycle/RejectActive/Revoke；HandleStop |
+
+除第11节内部回执及第12节时间观察外，本节仍是方案，不写入当前架构图当作已实现。后续HOST必须覆盖：旧启动/旧代次、缺片/交错/同号异参、重复不续期、过期同拍UPDATE、pending取消、结果被STOP覆盖、TX满丢回执后重读、时间戳多圈长停以及序号耗尽。保持现有“唯一appTask生产者→短PRIMASK发布→TIM1消费”交接方式；普通RTOS临界区不能屏蔽TIM1优先级0。
+
+
+### 10.8 008.04实施结果与分轮板测（2026-11-17）
+
+**实际改动与位置：**
+- 用户生成main.c的HSI48/MX_RNG_Init、rng.c/h、HAL RNG启用与配套库；原PLL/ADC/TIM/SPI/USART/FDCAN/RTOS配置保持。CubeMX只自动补普通目标，已为CommandBench同组补rng.c、hal_rng.c、hal_rng_ex.c；两目标均64个C＋1个汇编，原编译宏/内存布局保留。
+- 身份生成和Getter均在既有app_runtime.c/h；CAN新增05–09及provider参数在既有can_link.c/h与can_link_protocol.c/h。新增业务任务/业务源头文件=0。
+- 扩展原CAN协议/服务HOST及原runner；只新增一个`tests/run_runtime_boot_host.py`，原因是CAN provider桩不能证明真实启动身份组装/失败逻辑。该脚本直接抽取生产代码块、注入RNG结果，并校验main启动顺序；生成C桩留在忽略的build目录，不复制一份算法。
+- 修改已有固件/工程与配置11项、已有测试3项、本功能文档/证据4项；新增7个CubeMX/HAL RNG文件＋1个HOST脚本。此前存储规则/003文档仍是独立文档改动；uvoptx保留用户/工具本地配置，暂存时单独判断。
+
+**已验证：** 两目标增量0错误0警告；HOST身份3576、协议84080、服务70场景4868断言通过。旧Cygwin工具的FAST_CWD/Windows路径警告保留在日志，不能误写成环境完全无警告。HOST不模拟真实随机质量、HAL耗时、NVIC抢占或引脚输出；硬件两轮有限结果见下；008.04不证明后续008.05镜像。
+
+**风险与依据：** 随机身份是概率性区分，不是安全认证/绝对唯一。每字错误/零值检查依据[RM0433 第34.3.5–34.3.7节](https://www.st.com/resource/en/reference_manual/rm0433-stm32h742-stm32h743753-and-stm32h750-value-line-advanced-armbased-32bit-mcus-stmicroelectronics.pdf)；相邻重复属于额外保守检查，不是原厂要求首字无效。CED下48 MHz大于AHB/32（200/32＝6.25 MHz）。[ES0392 Rev16](https://www.st.com/resource/en/errata_sheet/dm00368411.pdf)未列RNG/HSI48专项勘误；实板硅修订号未读，不能声称完成所有硅版本验收。MX_RNG_Init/时钟初始化失败仍进Error_Handler，可能尚无CAN可用；只有其后取数包装层失败才可继续诊断FAILED。
+
+**第一轮：确认新镜像和状态，先不做运行命令。** 保持功率母线断开、仅控制/传感器供电，选择FOC_T_CommandBench下载并Run。PCAN保持500 kbit/s，标准数据帧、长度8、手动发送，ID321；回复ID322。先发：
+
+| 用途 | 321请求 | 322期望 |
+| --- | --- | --- |
+| 版本 | `51 01 04 01 00 00 00 00` | `52 01 04 01 04 08 00 00` |
+| 身份状态 | `51 01 05 02 00 00 00 00` | `52 01 05 02 01 00 00 00` |
+
+只看三项Watch：`app_boot_identity_state=1`、`axis_command_applied_seq=0`、`board_output_enabled=0`。若身份不是1，再换看app_boot_error_flags（bit0配置，1时钟，2种子，3超时，4HAL，5重复，6零值），不通过手工改状态掩盖失败。若连版本都无回复，先区分初始化Fatal和通信问题。
+
+**第一轮结果（2026-11-17，用户确认）：** 用户答复“没问题这个预期是一样的，进行下一步”，对应前一条明确列出的版本008.04回包、BOOT_STATE=VALID回包，以及app_boot_identity_state=1、axis_command_applied_seq=0、board_output_enabled=0。记为正常低频禁输出观察PASS（有限），证据类型是用户文字确认，未提供新的截图/原始Trace；不是完整身份、熵质量或保护路径验收。板端未回读AXF指纹，固件版本仅接口版本804。
+
+**第二轮：完整身份在同次启动固定、复位后重新生成。** 第一轮通过后，依次发送下表、记录四个回复的末4字节，并在同次Run再发一遍；完整四字应一致，查询不增applied_seq、不开放输出。
+
+| 字编号 | 请求 | 回复头，末4字节为小端word |
+| --- | --- | --- |
+| word0 | `51 01 06 03 00 00 00 00` | `52 01 06 03` |
+| word1 | `51 01 07 04 00 00 00 00` | `52 01 07 04` |
+| word2 | `51 01 08 05 00 00 00 00` | `52 01 08 05` |
+| word3 | `51 01 09 06 00 00 00 00` | `52 01 09 06` |
+
+PCAN中回复都使用ID322：每发一条就记录其末4字节后再发下一条，防止只留下最后一条显示；也可用Trace保存逐帧结果。先按word0→word3记录一组A，不复位再查一轮，应逐项相同。随后由用户执行MCU复位并Run（仅暂停/继续不算复位），先确认BOOT_STATE仍为1，再重新查询**全部四字**得到B；应观察到A与B整组不同，不要求人为指定任何字的值。不要将查询中途复位得到的混合页当作完整身份，也不能只拿一个word作为未来会话。版本和状态相同本身不证明发生过复位，应确认MCU实际Reset并重新Run；少量复位变化不证明统计质量。仍未接START/UPDATE，不写成运行命令验收。
+
+**第二轮结果（2026-11-17，有限观察）：** 用户提供四张ID322/DLC8回包截图：word0原始末4字节7D 27 63 F4（0xF463277D）、word1 CF B8 A6 3B（0x3BA6B8CF）、word2 E4 04 DE E7（0xE7DE04E4）、word3 EA 48 F3 D6（0xD6F348EA）。随后按“同次重读一致、MCU复位后整组变化、Watch仍1/0/0”清单，用户答复“可以了进行下一步”，按该上下文记录为完成确认。仅第一组有截图，复位后第二组具体字节/原始Trace未提供；不将文字确认写成已独立观察全部波形/熵质量。
+
+**验证边界：** 008.04两轮HW PASS（有限；首组截图＋用户按清单确认），该检查点可收尾。之后才处理10.7的完整事务、年龄守卫和可靠结果；不因身份有效就开放功率输出。
+
+
+## 11. 最近普通命令处理回执（008.05，已实现）
+
+**目标：** 保留最近一条已受理普通命令的处理记录，避免后来的空STOP/未受理拒绝覆盖它。它像一张签收单：核心曾安装、拒绝或取消哪条命令可以复查；它不是当前运行许可，也不证明FOC执行或物理输出。
+
+| 改动 | 合同 | 实施范围 |
+| --- | --- | --- |
+| core持久观察 | 新增AxisCommandReceipt：command_seq/result/control_seq，共12 B；seq=0表示暂无记录 | 既有axis_command_core.c/h |
+| 写入条件 | 只在Tick处理pending、或Revoke取消pending时写；采用可信last_accepted_seq归属唯一邮箱，序号非0且比旧记录新 | 不改旧result/result_seq/cancelled等语义 |
+| 不覆盖条件 | 受理/未受理拒绝、空STOP、查询、仅active后续停止/到期/故障不改回执 | APPLIED保留“曾被核心安装”的事实 |
+| task读取 | 新增appTask限定GetReceipt，原PRIMASK方案一次拷贝12 B；不清空、不ACK；旧72 B Snapshot不扩大 | 既有axis_command.c/h；不增每拍Watch镜像 |
+| 协议版本 | BUILD改为008.05，INFO/已有线路合同不变 | 不加未绑定序号的多页回执，不接CAN START/UPDATE |
+
+**具体取舍：**
+
+- result沿用AXIS_CMD_APPLIED或具体拒绝/取消原因，无需另一个outcome枚举。seq在本次启动跨epoch单调增加且耗尽不回绕，因此本条回执不另存epoch；跨复位身份仍由008.04与后续会话处理。
+- pending的command_seq被测试破坏成0/旧号时，不用该伪编号覆盖记录；以last_accepted_seq记录这条实际受理工单的BAD_SEQUENCE。保证依赖核心元数据正常，不宣称抵抗任意内存破坏。
+- active A和pending B同时撤销时，回执记录B的取消原因；A的已安装历史仍由原applied_seq表示。故障与STOP同拍优先记录B的FAULT，不被之后STOP诊断覆盖。
+- 新命令只受理还未处理时，上一回执仍可读；下一条处理后才覆盖。此处只保留一条记录，不是事件日志/完整ACK队列、不跨复位保存。后续CAN必须先读取并缓存前单终态，再允许下一普通事务覆盖。
+- control_seq是处理时的控制拍观察值，可回绕，不是重放防护编号。APPLIED不等于仍运行，更不证明电机实际转动；查看当下状态仍用原active_valid/permit/故障链。
+- 新Getter只作有界读取，不增加当前循环的定时调用。当前还没有CAN普通命令生产者，因此本轮以实际core/port HOST、两目标构建为证；不要求用户重复观察一堆零值来假称硬件回执验收。
+
+**验收（实施前）：** 旧core/FOC与端口/Bench/安全配置回归；新测试覆盖受理≠处理、APPLIED后active失效、拒绝/取消保留、active+pending撤销、故障+STOP同拍、坏pending序号、读者上下文/原PRIMASK恢复、抢占不撕裂与读取无副作用。两个Keil目标增量构建并核实际内存。真实TIM1开销和未来CAN结果重读待对应运行场景测量；HOST假时钟不证明板上耗时。
+
+### 11.1 实际实现与审查
+
+- `axis_command_core.h/.c`：新增12 B三字段结构和大小/偏移编译期检查；私有RetainPendingReceipt只由Tick处理pending或Revoke取消pending时调用。旧result/result_seq/cancelled_seq等行为保留；损坏帧下旧cancelled_seq不是可信回执。
+- `axis_command.h/.c`：新增appTask限定GetReceipt，12 B拷贝在PRIMASK临界区内；NULL/错误上下文返回AXIS_CMD_INVALID且不写输出，退出恢复原mask。原72 B Snapshot和逐拍Watch镜像不增加。
+- `can_link_protocol.h`：BUILD=0x805，INFO=0x100FF。扩展原core/port测试和两个CAN测试的版本预期；本检查点修改已有固件5项、测试4项、文档/证据4项，**新增文件0**。008.04未提交的RNG生成文件仍保留，不能误算为本轮拆出的模块。
+- 独立只读审查未发现新增逻辑缺陷。回执依赖核心元数据完整；不是内存损坏恢复机制。APPLIED只表示核心安装历史，不表示当前仍获许可或FOC/物理输出成功。
+
+### 11.2 验证结果
+
+| 项目 | 结果 / 边界 |
+| --- | --- |
+| 实际core与FOC HOST | 13场景612断言＋FOC407通过；覆盖取消/拒绝、坏序号、FAULT优先、回绕/耗尽与历史保留 |
+| 实际port/Bench/board_safety HOST | 普通端口77、Bench端口399、演练139、安全102，共717断言＋9配置通过；验证复制不撕裂、原mask恢复与无副作用 |
+| CAN回归 | 协议84080断言、服务70场景4868断言通过；线路除BUILD版本不变 |
+| Keil增量 | FOC_T_CommandBench 29秒、FOC_T 31秒，均0错误0警告；ARMCC5.06u7/960，无Rebuild All |
+| 板测 | 008.05 NOT_RUN；HOST假时钟/寄存器桩不证明实际IRQ时长、栈峰值、线路或输出 |
+
+原Cygwin编译器仍打印FAST_CWD/路径环境警告，原日志保留；不要把Keil的0警告扩写成整个HOST环境无警告。真实GetReceipt在两目标均因尚无调用而被链接剔除；生产源码经编译与HOST测试，但本镜像尚无实板读取路径。后续接入时再测完整临界区和控制耗时。
+
+### 11.3 链接资源
+
+| 目标 | ROM | 静态RW＋ZI | 对比008.04 |
+| --- | --- | --- | --- |
+| FOC_T | 61556 B | 25776 B | ROM＋48 B，静态RAM净＋8 B |
+| FOC_T_CommandBench | 65336 B | 25944 B | ROM＋48 B，静态RAM净＋8 B |
+
+command_core现为160 B，新增成员自身12 B；镜像总静态增量受链接对齐等影响，以实际map净值为准。仍使用内部128 KiB Flash，DTCM使用0 B、RW/ZI在0x24000000的AXI SRAM；heap16384 B、MSP4096 B、appTask栈从heap分配4096 B。未改链接脚本/外Flash/任务数；静态余量不等于已证明运行栈安全。
+
+### 11.4 008.05版本冒烟与验收界线（历史步骤）
+
+本次内部回执检查点已完成SRC/HOST/BUILD，不为它重复添加零值Watch，也不重新测全部RNG四字。若现在要核对下载的新镜像：
+
+1. 保持功率母线断开，Keil选`FOC_T_CommandBench`，下载当前已编译产物并Run；同一工作区未再改源码无需Rebuild All。
+2. PCAN：500 kbit/s，标准数据帧ID`321`、长度8、手动发`51 01 04 01 00 00 00 00`。
+3. 期望ID`322`回复`52 01 04 01 05 08 00 00`，只证明本版接口可响应；不据此给内部回执或运行许可记HW PASS。
+
+**2026-11-18结果：** 用户回复“没问题进行下一步”，按前述明确回包记录为版本响应冒烟PASS（有限，用户文字确认，无新截图/Trace/板端产物指纹）。内部回执/临界区耗时仍HW NOT_RUN。代码与测试结果由用户手动Git；接续步骤见第12节，不替用户操作硬件。
+
+
+## 12. CAN硬件时间与接收年龄（008.06，已实现，2026-11-18）
+
+**目标：** 为后续控制事务保留真正的硬件接收时刻，防止CPU暂停/长期排队后的旧帧被当成新帧。像记录快递到达而非拆包时间。本轮先完成可独立测试的计时基础，不再增加一种参数预检；完整事务和最终运行门禁接入仍是下一检查点。
+
+| 位置 | 本轮改动 / 合同 |
+| --- | --- |
+| 既有can_link.c/h | Init在HAL_Start前配置内部Timestamp PRESC16、CONTINUOUS Timeout TOP6250；解除FDCAN调试冻结；appTask唯一使用者 |
+| 服务进展 | Poll先处理旧链路事件，再检查计时状态，健康时重装Timeout并复查；每次非空必须消费/丢弃1帧，否则锁存失信；接收后读硬件RxTimestamp与TSCV，前后复核 |
+| 计时状态 | 私有状态0未就绪、1可观测、2失信锁存；与可写Watch镜像分离。TOO服务从不清；超时、配置/冻结变化、旧FIFO、接收丢失/取帧失败/链路致命错误失信；不自动恢复。reason为TIMEOUT1/CONFIG2/RX_LOST4/HAL8/LINK16；纯时间失信不追加旧can_link_error_count |
+| 诊断 | can_link_time_diag仅state/reason_flags/last_rx_age_us三个标量镜像；无新帧保留上次观测，不是不断增长的当前年龄。age未知或坏DLC直接丢弃为UINT32_MAX；协议无效但完整出队仍可有年龄，不能当有效命令；不增加任务/ISR/heap |
+| 线路 | BUILD008.06、INFO0x101FF增加bit8为时间观察能力；只读0A查状态、0B查最近出队帧年龄（包括本次查询自己）。时间配置HAL失败仍尝试Start供诊断；健康链路PING/STOP/原查询/预检保留，旧Bus-Off/RAM等致命锁停不保证可回复 |
+| 验证 | 扩展原CAN服务/协议HOST和原桩/runner；两个Keil目标增量构建及map；新文件0 |
+
+### 12.1 时间单位与不跨多圈的条件
+
+现有HSE25MHz、NBTP prescaler5/seg1=7/seg2=2/SJW1，500 kbit/s。TCP=16对应标称32µs/计数，16位65536计数约2.097152秒；6250计数约200ms。这个200ms只是检测appTask服务长期停止的预算，**不是电机命令有效期或失联停车阈值**。CAN采样点同步/重同步会影响时间刻度，不将其包装成精密墙钟或晶振实测证明。
+
+FIFO0固定8槽、blocking、唯一消费者，健康Poll在非空时必须消费/丢弃1帧；HAL取帧失败、索引/几何异常、溢出等立刻使时间失信。每次间隔受TOO粘滞约束，因此从SOF到当前采样的保守上界为(8+1)×6250计数加一个成功Classic帧接收时间，小于65536；这才允许16位模差，不是只凭TOO=0就假设帧新鲜。消费者提前退出但没有消费时必须失信；不能日后扩大FIFO/服务预算而不重审此证明。普通单次时间戳回绕不是故障，TOO不能被TSW清除/混淆。
+
+初始化检查HSE来源/25MHz配置、实际NBTP，设置TSCC/TOCC并在Start后复核正常模式、IE/ILE=0和调试未冻结。轮询复核关键配置及TOO；重装TOCV不清IR.TOO，重装前后均检查，暂停发生在检查与重装之间也不能抹掉超时。运行期不清TOO、不运行HAL FDCAN IRQ、不用HAL tick给旧帧重新盖章。硬件时钟实际停摆、调试器任意改寄存器后恢复等不在本轮可证明边界内。检查CCU的BCC=1/CDIV=0/SWR=0，但不写CCU；原厂CCFG复位数值与旁路默认描述存在矛盾，不靠假定默认值放行；本次用户截图CCFG=0x444符合要求，具体证据边界见12.6。初始化先检查FIFO为空，再重置TSCV，避免把遗留帧放到新时间原点。
+
+依据：[本地HAL](../../Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_fdcan.c) Config/EnableTimestamp、Config/EnableTimeout、ResetTimeout、GetRxMessage；[本地CMSIS定义](../../Drivers/CMSIS/Device/ST/STM32H7xx/Include/stm32h750xx.h)；[RM0433 FDCAN/CCU章节](https://www.st.com/resource/en/reference_manual/rm0433-stm32h742-stm32h743753-and-stm32h750-value-line-advanced-armbased-32bit-mcus-stmicroelectronics.pdf)、[Bosch M_CAN计时章节](https://www.bosch-semiconductors.com/media/ip_modules/pdf_2/m_can/mcan_users_manual_v331.pdf)。本地RCCEx的HSE频率查询包含HSERDY检查，返回配置值而非测量晶振。
+
+### 12.2 本轮边界及后续接入
+
+状态1只表示满足本轮时间观察条件，不能授予控制许可。本轮不调用Submit，不修改TIM1/FOC输出；停止计时可信性也不等于实现了运行失联停车。后续完整事务还须将首分片原始时刻/截止条件贯穿发布、TIM1消费和最终许可，并在时间不可信时撤销会话与旧事务；不能只在出队时检查一次。
+
+多帧事务拟采用完整128位boot身份＋外部请求号＋run_epoch＋整组速度/Iq＋opcode/期限绑定；严格顺序、重复同内容不续期、冲突不拼单、保留结果。CRC若用于整组检错，不是鉴权或绝对无碰撞证明；具体线序与执行接入下一检查点固定。需要批量发送工具，不能因PCAN手填慢而把期限起点改成最后COMMIT出队时间。
+
+### 12.3 实施前验收
+
+HOST覆盖正常计时、单次回绕、初始化/重装HAL失败、重装前后及读取期间TOO、FIFO溢出/坏索引/取帧失败、配置/冻结变化、失信后诊断继续、Watch篡改不改变权威状态、旧STOP/预检无新增控制副作用；旧协议回归。实板仅分两轮：先看健康状态与报文年龄，再在禁输出条件下主动暂停超过200ms，观察恢复后失信锁存。两轮各不超过3个Watch，详细步骤见12.5。
+
+
+### 12.4 实际结果（2026-11-18）
+
+- 固件只修改原can_link.c/h、can_link_protocol.c/h；测试只修改原service/protocol HOST、fdcan桩和service runner；文档仍README/ARCHITECTURE/本spec/原validation四处。**本轮新增文件0**，不修改IOC、Axis/FOC、RTOS、链接布局或CCU配置。
+- SRC独立只读审查未发现必须修正的问题。HAL时间配置均在Start前，运行不重置TSCV、不清TOO；旧RAM/Bus-Off锁停保留。新增编译期约束9×6250＋16<65536；成功Classic帧保守预留16计数。
+- HOST：协议89573断言，服务147场景12116断言通过。覆盖正常回绕、粘滞超时、重装/出队各边界、配置/冻结/RX丢失、8槽进展、坏DLC、私有状态、旧STOP/预检/真实core无副作用。真实硬件事件由桩模拟；原Cygwin FAST_CWD环境提示保留。
+- Keil：Bench增量17秒、普通目标2秒，均0错误0警告。Bench ROM66420 B、RW+ZI25968 B，较008.05＋1084/＋24；普通目标61556/25776 B不变（CAN服务仍只在Bench编译）。
+- 两目标仍内部Flash128 KiB、DTCM0 B、RW/ZI在AXI SRAM；heap16384 B、MSP4096 B、appTask4096 B从heap分配，未重复计数。Bench CanLink_Poll自身静态栈帧160 B、CheckTime16 B、TimeConfigurationValid16 B、ObserveRxAge16 B；这些不等于含间接调用/IRQ的最坏任务栈验收。
+- 完成构建时HW为NOT_RUN；随后用户提供截图及按清单确认，本轮HW PASS（有限），详见12.6。构建时的历史状态保留在原始validation，假时钟/旧板测不作为本轮硬件证据。
+
+### 12.5 最少板测步骤（结果见12.6）
+
+保持功率母线断开、仅控制/传感器供电。选择FOC_T_CommandBench下载已构建产物并Run；本轮无需CubeMX再生成，也无需Rebuild All。
+
+**第一轮：配置与正常通信。**
+
+1. PCAN仍500 kbit/s、标准帧、长度8、ID321手动发`51 01 04 01 00 00 00 00`；ID322期望`52 01 04 01 06 08 00 00`。
+2. 先只看三项：`FDCAN_CCU->CCFG`（记录原值，不写寄存器）、`can_link_time_diag.state`（应为1）、`can_link_time_diag.last_rx_age_us`（收帧后为有限值而非0xFFFFFFFF）。CCFG宏若不能解析，可在Memory窗口读32位地址`0x4000A804`，勿修改。
+3. 年龄是最近出队观测，单位标称µs，随每次报文/调度变化正常，不要求持续增加或等于1秒发包间隔。未收帧时FFFFFFFF正常。若state=2，先换看reason_flags并连同CCFG反馈；不要改Watch/清旗强行恢复。
+4. CCFG记录后可移除该项，换成`app_task_deadline_misses`，连续Run约20秒、PING每1000ms一次；正常期应无新增超时。此轮只观察轻负载，不当满负载/最坏栈证明。
+
+**第二轮：第一轮正常后验证暂停证据。**
+
+停止周期发送，保证无功率输出。只看state、reason_flags、last_rx_age_us三项；Keil暂停约3秒后Run，再发一次版本查询。预期state=2、reason_flags含0x01、年龄FFFFFFFF，CAN版本仍可回复。继续Run不会恢复1；MCU Reset+Run后重新建立计时，正常收帧再得到有限年龄。本次人为暂停不拿其它任务/采样异常计数作正常负载判据。若reason仅0x02，应先核调试器是否改变冻结/CCU等配置，不把它写成TOO暂停测试通过。
+
+可选CAN只读观察（不必与Watch同时增加）：`51 01 0A 02 00 00 00 00`查state；`51 01 0B 03 00 00 00 00`查年龄，回复仍52/01/原opcode/token＋小端uint32。新查询也不提交/续期运行命令。
+
+两轮结果确认后再关闭本检查点、由用户手动提交；下一开发步骤实现完整事务及贯穿控制边界的时间门禁。本功能单独通过不证明失联停车或物理输出安全。
+
+
+### 12.6 有限板测收尾（会话日期2026-11-18）
+
+条件沿用禁输出FOC_T_CommandBench、功率母线断开、控制/传感器供电；PCAN 500 kbit/s、标准帧、8字节、请求321/回复322。用户执行操作，助手没有下载/复位/操作电源。本次只更新既有文档与证据，不改源码、不重复构建。
+
+| 项目 | 已收到证据 | 结论与边界 |
+| --- | --- | --- |
+| CCU与首次年龄 | Watch截图CCFG=0x00000444、state=1、age=0x00000320 | BCC=1/CDIV=0/SWR=0符合当前检查；年龄800标称µs，只证明该次观察 |
+| 正常低频轮 | 针对约20秒连续Run、PING每1000ms、state=1/年龄有限/任务超时不增加的清单，用户答“没问题，下一步吧” | 正常轻负载观察通过（文字确认），未提供起止计数或原始Trace |
+| 暂停与复位状态 | 用户答“前两个参数都如预期一样”，并报告age一直FFFFFFFF | 按上下文记录state/reason的暂停锁存及复位恢复获文字确认；没有逐阶段寄存器截图，不声称独立重放完整操作 |
+| 恢复后的私有年龄 | 在“MCU Reset→Run、不再暂停、手发51 01 0B 21 00 00 00 00”的指引后，截图回复322/长度8：52 01 0B 21 E0 02 00 00 | 新token21匹配，末4字节小端0x000002E0=736标称µs（23计数）；该次查询已得到可信有限年龄 |
+
+回包直接来自私有年龄，不依赖Watch镜像。先前Watch显示FFFFFFFF的具体原因未确认，不能断言是刷新问题、漏发新帧或固件缺陷。当前回包消除了“恢复后仍无可信年龄”的阻塞；它不证明之前每一时刻的Watch状态。PCAN截图的Cycle Time/Count不用于推导响应延时、丢包率或本轮运行时长。
+
+**验收：** 本轮配置、低频正常观察及暂停/恢复的有限检查点可收尾。独立的008.06版本回包和板端AXF指纹未提供；记录关联当前008.06工作区与既有构建清单，不能当作板端产物身份的独立证明。硬件计时精度、约200ms阈值精确测量、满负载/最坏耗时和栈、实际失联停车与物理输出安全仍未验收；本轮尚无CAN START/UPDATE生产者。
+
+下一步按10.7接入完整事务、首帧时间贯穿Submit/BeginCycle/FinalPermit、外部请求号到内部序号的结果缓存；继续复用现有CAN/Axis模块，不按命令拆新文件。用户手动Git，不自动暂存/提交。

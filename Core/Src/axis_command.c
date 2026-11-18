@@ -168,3 +168,16 @@ uint32_t AxisCommandPort_GetSnapshot(AxisCommandSnapshot *snapshot)
     Unlock(saved, started);
     return AXIS_CMD_OK;
 }
+
+
+uint32_t AxisCommandPort_GetReceipt(AxisCommandReceipt *receipt)
+{
+    uint32_t saved, started;
+    if ((receipt == NULL) || (IsPublisher() == 0U)) return AXIS_CMD_INVALID;
+    saved = __get_PRIMASK();
+    __disable_irq();
+    started = DWT->CYCCNT;
+    *receipt = command_core.receipt;
+    Unlock(saved, started);
+    return AXIS_CMD_OK;
+}

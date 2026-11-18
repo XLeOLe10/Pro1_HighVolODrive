@@ -4,6 +4,11 @@
 #include <string.h>
 
 typedef char AxisCommandFrame_must_be_32_bytes[(sizeof(AxisCommandFrame) == 32U) ? 1 : -1];
+typedef char AxisCommandReceipt_must_be_12_bytes[(sizeof(AxisCommandReceipt) == 12U) ? 1 : -1];
+typedef char AxisCommandReceipt_field_offsets[(
+    offsetof(AxisCommandReceipt, command_seq) == 0U &&
+    offsetof(AxisCommandReceipt, result) == 4U &&
+    offsetof(AxisCommandReceipt, control_seq) == 8U) ? 1 : -1];
 typedef char AxisCommandFloat_must_be_32_bits[(sizeof(float) == 4U) ? 1 : -1];
 typedef struct { char padding; AxisCommandFrame frame; } FrameAlignmentProbe;
 typedef char AxisCommandFrame_alignment[(offsetof(FrameAlignmentProbe, frame) % 4U == 0U) ? 1 : -1];
@@ -51,6 +56,21 @@ static uint32_t Report(AxisCommandCore *c, uint32_t seq, uint32_t result)
     c->result_seq = seq;
     c->result = result;
     return result;
+}
+
+/* TIM1 only, before removing a pending frame. The single occupied mailbox
+ * belongs to last_accepted_seq even when its frame sequence is invalid. Never
+ * attribute a receipt to that corrupted field or overwrite a newer receipt.
+ * Core metadata integrity is required; this is not memory-corruption recovery. */
+static void RetainPendingReceipt(AxisCommandCore *c, uint32_t result)
+{
+    if ((c->last_accepted_seq != 0U) &&
+        (c->last_accepted_seq > c->receipt.command_seq))
+    {
+        c->receipt.command_seq = c->last_accepted_seq;
+        c->receipt.result = result;
+        c->receipt.control_seq = c->control_seq;
+    }
 }
 
 void AxisCommand_Init(AxisCommandCore *c, const AxisCommandLimits *limits)
@@ -140,7 +160,11 @@ void AxisCommand_Revoke(AxisCommandCore *c, uint32_t reason)
         ((reason == AXIS_CMD_FAULT) && (c->fault_latched == 0U));
     uint32_t seq = c->active_valid ? c->active.command_seq :
         (c->pending_ready ? c->pending.command_seq : 0U);
-    if (c->pending_ready) c->cancelled_seq = c->pending.command_seq;
+    if (c->pending_ready)
+    {
+        c->cancelled_seq = c->pending.command_seq;
+        RetainPendingReceipt(c, reason);
+    }
     c->active_valid = 0U;
     c->pending_ready = 0U;
     if (reason == AXIS_CMD_FAULT) c->fault_latched = 1U;
@@ -255,6 +279,7 @@ void AxisCommand_Tick(AxisCommandCore *c, uint32_t now,
         c->applied_control_seq = c->control_seq;
         result = AXIS_CMD_APPLIED;
     }
+    RetainPendingReceipt(c, result);
     c->pending_ready = 0U;
     Report(c, seq, result);
 }

@@ -1,5 +1,6 @@
 #include "main.h"
 #include "app_runtime.h"
+#include "rng.h"
 #include "app_policy.h"
 #include "axis_status.h"
 #include "axis_command.h"
@@ -53,6 +54,113 @@ volatile uint32_t app_feedback_invalid_count = 0U;
 volatile uint32_t app_adc_missed_count = 0U;
 volatile uint32_t app_start_rejected_count = 0U;
 volatile uint32_t app_critical_max_cycles = 0U;
+
+/* BOOT IDENTITY BEGIN: tested from this production block on the host. */
+static uint32_t boot_identity_attempted;
+static uint32_t boot_identity_state = APP_BOOT_STATE_NOT_READY;
+static uint32_t boot_identity_words[4];
+volatile uint32_t app_boot_identity_state = APP_BOOT_STATE_NOT_READY;
+volatile uint32_t app_boot_error_flags;
+
+/* Only the startup context reads RNG. No other reader/IRQ may consume DR.
+ * HAL H750 lacks the CONDRST-path seed checks, so inspect current AND sticky
+ * error bits before/after each word; never clear them or substitute entropy. */
+static uint32_t BootRngStatusErrors(void)
+{
+    uint32_t sr = hrng.Instance->SR;
+    uint32_t errors = 0U;
+    if ((sr & (RNG_SR_CECS | RNG_SR_CEIS)) != 0U)
+        errors |= APP_BOOT_ERROR_CLOCK;
+    if ((sr & (RNG_SR_SECS | RNG_SR_SEIS)) != 0U)
+        errors |= APP_BOOT_ERROR_SEED;
+    return errors;
+}
+
+static uint32_t ReadBootWord(uint32_t *word)
+{
+    uint32_t errors = BootRngStatusErrors();
+    HAL_StatusTypeDef result;
+    if (errors != 0U)
+    {
+        app_boot_error_flags |= errors;
+        return 0U;
+    }
+    /* HAL timeout uses the live TIM7 tick (>2 ms), NOT a hard independent
+     * watchdog. Caller is pre-scheduler with interrupts enabled; no retries. */
+    result = HAL_RNG_GenerateRandomNumber(&hrng, word);
+    errors = BootRngStatusErrors();
+    if ((hrng.ErrorCode & HAL_RNG_ERROR_TIMEOUT) != 0U)
+        errors |= APP_BOOT_ERROR_TIMEOUT;
+    if ((result != HAL_OK) || (hrng.State != HAL_RNG_STATE_READY) ||
+        (hrng.ErrorCode != HAL_RNG_ERROR_NONE))
+        errors |= APP_BOOT_ERROR_HAL;
+    /* RM0433 34.3.5 recommends rejecting zero after DR reads as well,
+     * covering a seed/DRDY race even when status sampling missed it. */
+    if ((errors == 0U) && (*word == 0U)) errors |= APP_BOOT_ERROR_ZERO;
+    app_boot_error_flags |= errors;
+    return (errors == 0U) ? 1U : 0U;
+}
+
+static void InitBootIdentity(void)
+{
+    uint32_t candidate[4];
+    uint32_t previous;
+    unsigned int i;
+    if (boot_identity_attempted != 0U) return;
+    boot_identity_attempted = 1U;
+    /* Failure is sticky for this boot. Private words remain zero until the
+     * whole candidate is validated. No control permission is touched. */
+    if ((hrng.Instance != RNG) || (hrng.State != HAL_RNG_STATE_READY) ||
+        (hrng.ErrorCode != HAL_RNG_ERROR_NONE) ||
+        (hrng.Init.ClockErrorDetection != RNG_CED_ENABLE) ||
+        (__get_PRIMASK() != 0U) || (__get_IPSR() != 0U))
+    {
+        app_boot_error_flags |= APP_BOOT_ERROR_CONFIG;
+        goto failed;
+    }
+    if (((hrng.Instance->CR & RNG_CR_RNGEN) == 0U) ||
+        ((hrng.Instance->CR & (RNG_CR_CED | RNG_CR_IE)) != 0U))
+    {
+        app_boot_error_flags |= APP_BOOT_ERROR_CONFIG;
+        goto failed;
+    }
+    /* First word is the continuous-comparison reference, not identity data.
+     * Every subsequent word must differ from its immediate predecessor.
+     * This conservative check is NOT a statistical randomness certification. */
+    if (ReadBootWord(&previous) == 0U) goto failed;
+    for (i = 0U; i < 4U; ++i)
+    {
+        if (ReadBootWord(&candidate[i]) == 0U) goto failed;
+        if (candidate[i] == previous)
+        {
+            app_boot_error_flags |= APP_BOOT_ERROR_REPEAT;
+            goto failed;
+        }
+        previous = candidate[i];
+    }
+    for (i = 0U; i < 4U; ++i) boot_identity_words[i] = candidate[i];
+    /* No task/TIM1 consumer exists yet. Publication is complete before the
+     * scheduler starts; state/words are never rewritten until MCU reset. */
+    boot_identity_state = APP_BOOT_STATE_VALID;
+    app_boot_identity_state = boot_identity_state;
+    return;
+failed:
+    boot_identity_state = APP_BOOT_STATE_FAILED;
+    app_boot_identity_state = boot_identity_state;
+}
+
+uint32_t AppRuntime_GetBootIdentity(uint32_t words[4])
+{
+    unsigned int i;
+    if (words != NULL)
+    {
+        for (i = 0U; i < 4U; ++i)
+            words[i] = (boot_identity_state == APP_BOOT_STATE_VALID) ?
+                       boot_identity_words[i] : 0U;
+    }
+    return boot_identity_state;
+}
+/* BOOT IDENTITY END */
 
 static volatile uint8_t runtime_initialized;
 static volatile uint8_t runtime_started;
@@ -260,6 +368,7 @@ void AppRuntime_Init(void)
 {
     /* MX_TIM1_Init configured AF pins; restore GPIO-low until calibration. */
     BoardSafety_InitSafe();
+    InitBootIdentity(); /* MX_RNG_Init has completed; TIM7 tick is live. */
     CurrentSense_Init();
     CurrentMonitor_Init();
     AD2S1210_Init();
@@ -290,8 +399,9 @@ void AppRuntime_TaskStart(void)
     app_heap_free_bytes = (uint32_t)xPortGetFreeHeapSize();
     app_heap_min_free_bytes = (uint32_t)xPortGetMinimumEverFreeHeapSize();
 #if AXIS_COMMAND_BENCH_ENABLE
-    CanLink_Init(ReadCanStatus, RequestCanStop, CheckCanTargets);
-    /* STOP is still the sole Bench command; pair precheck never publishes. */
+    CanLink_Init(ReadCanStatus, RequestCanStop, CheckCanTargets,
+                 AppRuntime_GetBootIdentity);
+    /* STOP is still the sole Bench command; precheck/identity never publish. */
 #endif
     CurrentSense_Start();
 #if AXIS_COMMAND_BENCH_ENABLE

@@ -2049,3 +2049,950 @@ Added files=0; no new firmware tests/build for documentation-only closeout.
 User stages/commits the existing 18 feature files; local MDK-ARM/FOC_T.uvoptx remains separate.
 Next: session/age/result-retention contract before CAN START/UPDATE, still on power-disabled target.
 ========== END 008.03 PCAN RECOVERY / HW PASS LIMITED ==========
+
+
+========== 008.04 DESIGN PREFLIGHT 2026-11-17 ==========
+User: 可以了进行下一步
+Baseline: Xiao_ODrive / 30aa8d1, commit title 接入 CAN 速度与 Iq 参数.
+Starting worktree: only MDK-ARM/FOC_T.uvoptx modified by user; preserved.
+Scope of this turn: read-only code/config/HAL review and existing-document design update.
+Firmware / IOC / Keil project changes: NONE. New files: NONE. No build/download/hardware operation.
+
+OBSERVED:
+- FOC_T.ioc Mcu.IP has no RNG; RCC.RNGFreq_Value=48000000 is only a computed frequency.
+- Core/Inc/stm32h7xx_hal_conf.h HAL_RNG_MODULE_ENABLED is commented out.
+- No project rng.c/h or HAL RNG driver source/header currently copied.
+- main.c SystemClock_Config enables HSI/HSE but not HSI48; main has no MX_RNG_Init.
+- Local RCC header supports RNG HSI48; H750 header has HASH_RNG_IRQn=80, RNG CR CED and clock/seed status bits.
+- Matching local STM32Cube_FW_H7_V1.12.1 RNG driver available in user Cube repository.
+- HAL_RNG_GenerateRandomNumber on H750's no-CONDRST path requires wrapper-level health review, not only HAL_OK.
+- Current CPU/HCLK200MHz, FDCAN HSE25MHz, SPI123 HSI64MHz, USART16 PCLK2 100MHz are to remain unchanged.
+- Existing command Snapshot is not durable ACK: Publish rejection and STOP can overwrite result/result_seq.
+- FDCAN HAL has SOF RxTimestamp and continuous timeout APIs; not enabled by current service.
+- HAL tick is TIM7-IRQ driven; pause/long masking requires independent freshness treatment before START.
+
+DECISIONS (PROPOSED, NOT IMPLEMENTED):
+- Next small checkpoint 008.04: RNG-generated immutable 128-bit boot identity plus read-only state/four-word query.
+- Prefer HSI48 for RNG, startup-only bounded polling, no new DMA/IRQ/task.
+- Identity invalid/error prohibits future running sessions; no fallback UID/DWT/fixed identity.
+- Random identity is probabilistic, not absolute uniqueness or peer authentication.
+- User configures RNG/HSI48 in CubeMX and generates; then review generated diff, integrate code and build both targets.
+- Query opcodes05..09 and BUILD008.04 are reserved in spec only; live code remains008.03.
+- Complete run transaction, timestamp/timeout final gate and durable consumption result follow independently.
+
+VALIDATION:
+Existing-source/configuration review: PASS (limited).
+008.04 implementation: NOT_STARTED.
+008.04 compile-time checks / BUILD / HOST / HW: NOT_RUN.
+Historical008.03 PASS is not reused as proof of new feature.
+Only README, ARCHITECTURE version/current-fact correction, spec008 and this evidence file changed.
+========== END 008.04 DESIGN PREFLIGHT ==========
+
+
+========== 008.04 IMPLEMENTATION / BUILD / HOST (2026-11-17) ==========
+BASE: Xiao_ODrive / 30aa8d1 + generated RNG and this working tree.
+HW: NOT_RUN. No download, hardware/power action, stage/commit/push.
+Scope: startup-only immutable 128-bit identity and read-only CAN05..09.
+No CAN START/UPDATE/session authorization implemented; no output permission change.
+
+GENERATION / INTEGRATION:
+- User generated RNG in CubeMX6.16: HSI48 ON, RNG source HSI48 48MHz,
+  RNG_CED_ENABLE, HAL_RNG_MODULE_ENABLED, MX_RNG_Init before AppRuntime_Init.
+- No RNG IRQ/DMA/new task. Existing PLL, FDCAN500k/SPI/USART/TIM/ADC/RTOS retained.
+- CubeMX omitted rng.c/hal_rng.c/hal_rng_ex.c from CommandBench. Added only
+  these three entries in existing groups; both targets now64 C +1 assembly.
+- Original source/options/macros/Flash-RAM config unchanged. CubeMX set normal
+  AfterMake RunUserProg2=1 with empty command name; both actual builds passed.
+- Trimmed only redundant project EOF blank line after build; XML semantics same.
+- uvoptx user/tool configuration not edited manually; observed SHA256 after
+  Bench and Normal builds identical (5DBACAFEFC6DE76EBE7D7DE2A956545274814D72B2097163927DD1AD5E3A7183).
+
+IMPLEMENTATION:
+- app_runtime InitBootIdentity once, before scheduler/TIM1 control IRQ.
+  Five reads at most: first comparison reference discarded, four candidate words.
+  Before/after SR CECS/CEIS/SECS/SEIS and HAL result/state/ErrorCode checked.
+  Every zero word and adjacent repetition rejected; no seed recovery/retry.
+  All four succeed before private words/state published. Failure sticky.
+- Watch mirrors are not authority. Getter copies immutable private state/words,
+  zeroes words if invalid; no RNG/heap/IRQ masking in queries.
+- CAN request321/reply322 standard/classic/DLC8 unchanged.
+  05 state0/1/2;06..09 words. BUILD804, INFO100FF. Invalid provider states
+  fail closed; empty provider prevents service initialization.
+- Real control/safety files unchanged; 12 relevant control/config files compared
+  with HEAD after CRLF normalization, all identical.
+
+BOUNDARIES:
+- Hardware RNG quality, boot-to-boot observations, actual chip revision,
+  IRQ/timing/stack/electrical behavior NOT verified by HOST.
+- HAL timeout is tick difference >2ms and depends on live TIM7 tick; not an
+  independent hard deadline. Normal startup requires unsuppressed TIM7.
+- MX_RNG_Init/SystemClock failure goes Error_Handler before query service;
+  only later wrapper failure can report identity FAILED with CAN alive.
+- Random ID is probabilistic, not authentication or complete replay protection.
+- RM0433 RNG34.3.5..7/ES0392 Rev16 reviewed; zero-word check per RM,
+  adjacent-repeat/reference-word policy is additional conservative software check.
+- No claim that old HW PASS covers new AXF.
+
+VALIDATION:
+- Startup actual-production-block HOST:3576 assertions PASS. Stub injection
+  covers each read failure, sticky/current errors, zero/repeat, no partial
+  publication, no retry, private state vs Watch, repeated read/reset models.
+  New single tests/run_runtime_boot_host.py; generated harness ignored in build/.
+- Protocol HOST:84080 assertions PASS.
+- CAN service HOST:70 scenarios /4868 assertions PASS, including old PING,
+  query, STOP/retained result, target precheck and failures/no control side effects.
+- Both Keil incremental builds:-b (not Rebuild All),0 errors/0 warnings.
+  HAL configuration header changed, so dependent files rebuilt.
+- XML/source-list, original safety-profile macros, diff whitespace and local
+  documentation paths checked. No new business c/h files.
+- Old Cygwin environment FAST_CWD/Windows-path warnings preserved in logs;
+  these are not source diagnostics, and are not hidden as a clean environment.
+
+COMMANDS:
+  .\tests\run-can-host.ps1
+  .\tests\run-can-service-host.ps1
+  C:\Users\LEGION\AppData\Local\Programs\Python\Python310\python.exe tests/run_runtime_boot_host.py
+  D:\UV4\UV4.exe -b MDK-ARM\FOC_T.uvprojx -t FOC_T_CommandBench -o build\008-can-boot-identity\bench-build.txt
+  D:\UV4\UV4.exe -b MDK-ARM\FOC_T.uvprojx -t FOC_T -o build\008-can-boot-identity\normal-build.txt
+
+MAP FOC_T:
+  Load Region LR_IROM1 (Base: 0x08000000, Size: 0x0000f2f8, Max: 0x00020000, ABSOLUTE, COMPRESSED[0x0000f044])
+    Execution Region RW_IRAM1 (Exec base: 0x20000000, Load base: 0x0800efe0, Size: 0x00000000, Max: 0x00020000, ABSOLUTE)
+    Execution Region RW_IRAM2 (Exec base: 0x24000000, Load base: 0x0800efe0, Size: 0x000064a8, Max: 0x00080000, ABSOLUTE, COMPRESSED[0x00000064])
+    Total ROM Size (Code + RO Data + RW Data)      61508 (  60.07kB)
+MAP FOC_T_CommandBench:
+  Load Region LR_IROM1 (Base: 0x08000000, Size: 0x00010224, Max: 0x00020000, ABSOLUTE, COMPRESSED[0x0000ff08])
+    Execution Region RW_IRAM1 (Exec base: 0x20000000, Load base: 0x0800fe9c, Size: 0x00000000, Max: 0x00020000, ABSOLUTE)
+    Execution Region RW_IRAM2 (Exec base: 0x24000000, Load base: 0x0800fe9c, Size: 0x00006550, Max: 0x00080000, ABSOLUTE, COMPRESSED[0x0000006c])
+    Total ROM Size (Code + RO Data + RW Data)      65288 (  63.76kB)
+RAM: normal25768 B / bench25936 B (both +56 B vs008.03). ucHeap16384 B
+and appTask4096 B unchanged; stack is already part of heap, not counted twice.
+FLASH: normal61508 B (+824) / bench65288 B (+956); internal limit131072 B.
+
+
+BENCH BUILD TAIL:
+compiling stm32h7xx_hal_uart_ex.c...
+compiling system_stm32h7xx.c...
+compiling stm32h7xx_hal_uart.c...
+compiling cmsis_os2.c...
+linking...
+Program Size: Code=64276 RO-data=904 RW-data=904 ZI-data=25032
+FromELF: creating hex file...
+"FOC_T_CommandBench\FOC_T_CommandBench.axf" - 0 Error(s), 0 Warning(s).
+Build Time Elapsed:  00:03:55
+
+NORMAL BUILD TAIL:
+compiling system_stm32h7xx.c...
+compiling stm32h7xx_hal_uart_ex.c...
+compiling stm32h7xx_hal_uart.c...
+compiling cmsis_os2.c...
+linking...
+Program Size: Code=60504 RO-data=904 RW-data=792 ZI-data=24976
+FromELF: creating hex file...
+"FOC_T\FOC_T.axf" - 0 Error(s), 0 Warning(s).
+Build Time Elapsed:  00:03:23
+
+RUNTIME HOST RAW:
+Production block SHA256: a1a2aa128ea33b75573d7644a6571ce22a24cd7b5fb08bf9776041c9424e2b97
+COMMAND: D:\FPGA\QuartusII_13.0\quartus\bin64\cygwin\bin\gcc.exe -std=c99 -O2 -Wall -Wextra -Werror -pedantic -I D:\stm32H750\High_fengshan\FOC_T\Core\Inc -I D:\stm32H750\High_fengshan\FOC_T\build\008-can-boot-identity D:\stm32H750\High_fengshan\FOC_T\build\008-can-boot-identity\runtime_boot_host.c -o D:\stm32H750\High_fengshan\FOC_T\build\008-can-boot-identity\runtime_boot_host.exe
+      0 [main] gcc 191516 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+cygwin warning:
+  MS-DOS style path detected: D:\stm32H750\High_fengshan\FOC_T\build\008-can-boot-identity\runtime_boot_host.c
+  Preferred POSIX equivalent is: /cygdrive/d/stm32H750/High_fengshan/FOC_T/build/008-can-boot-identity/runtime_boot_host.c
+  CYGWIN environment variable option "nodosfilewarning" turns off this warning.
+  Consult the user's guide for more details about POSIX paths:
+    http://cygwin.com/cygwin-ug-net/using.html#using-pathnames
+EXIT: 0
+COMMAND: D:\stm32H750\High_fengshan\FOC_T\build\008-can-boot-identity\runtime_boot_host.exe
+      0 [main] runtime_boot_host 186456 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+PASS: 3576 startup identity assertions (actual runtime block)
+EXIT: 0
+
+PROTOCOL HOST RAW:
+      0 [main] gcc 192036 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+gcc (GCC) 4.5.3
+Copyright (C) 2010 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+      0 [main] gcc 191176 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+      0 [main] can_link_protocol_host 188800 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+CAN protocol HOST PASS: 84080 assertions
+HOST CAN protocol suite PASS
+
+SERVICE HOST RESULTS (PASS lines; original warning-bearing log hashed below):
+CAN service valid: 37 assertions PASS
+CAN service lengths: 90 assertions PASS
+CAN service rejects: 54 assertions PASS
+CAN service busy: 27 assertions PASS
+CAN service rx-fail: 24 assertions PASS
+CAN service tx-fail: 30 assertions PASS
+CAN service errors: 28 assertions PASS
+CAN service busoff-ir: 24 assertions PASS
+CAN service busoff-psr: 23 assertions PASS
+CAN service ram-error: 24 assertions PASS
+CAN service bad-index: 21 assertions PASS
+CAN service overwrite: 21 assertions PASS
+CAN service query-valid: 93 assertions PASS
+CAN service query-status: 79 assertions PASS
+CAN service query-rejects: 114 assertions PASS
+CAN service query-dlc: 76 assertions PASS
+CAN service query-busy: 29 assertions PASS
+CAN service query-rx-fail: 26 assertions PASS
+CAN service query-tx-fail: 33 assertions PASS
+CAN service query-busoff: 21 assertions PASS
+CAN service no-provider: 10 assertions PASS
+CAN service stop-valid: 79 assertions PASS
+CAN service stop-ordering: 96 assertions PASS
+CAN service stop-tx-busy: 51 assertions PASS
+CAN service stop-tx-fail: 56 assertions PASS
+CAN service stop-rejected: 89 assertions PASS
+CAN service stop-invalid: 77 assertions PASS
+CAN service stop-dlc: 74 assertions PASS
+CAN service stop-busoff: 19 assertions PASS
+CAN service stop-rx-fail: 22 assertions PASS
+CAN service stop-no-provider: 6 assertions PASS
+CAN service stop-max-id: 54 assertions PASS
+CAN service stop-core-0: 77 assertions PASS
+CAN service stop-core-1: 73 assertions PASS
+CAN service stop-core-2: 70 assertions PASS
+CAN service stop-core-3: 71 assertions PASS
+CAN service target-valid: 87 assertions PASS
+CAN service target-rejects: 67 assertions PASS
+CAN service target-dlc: 73 assertions PASS
+CAN service target-missing: 7 assertions PASS
+CAN service target-bad-provider: 39 assertions PASS
+CAN service target-core: 135 assertions PASS
+CAN service stop-target-retained: 71 assertions PASS
+CAN service target-failure-0: 39 assertions PASS
+CAN service target-failure-1: 44 assertions PASS
+CAN service target-failure-2: 25 assertions PASS
+CAN service target-failure-3: 22 assertions PASS
+CAN service boot-state-0: 367 assertions PASS
+CAN service boot-state-1: 367 assertions PASS
+CAN service boot-state-2: 367 assertions PASS
+CAN service boot-rejects: 498 assertions PASS
+CAN service boot-dlc: 304 assertions PASS
+CAN service boot-missing: 7 assertions PASS
+CAN service boot-bad-provider: 147 assertions PASS
+CAN service stop-boot-retained: 117 assertions PASS
+CAN service boot-failure-0: 44 assertions PASS
+CAN service boot-failure-1: 49 assertions PASS
+CAN service boot-failure-2: 42 assertions PASS
+CAN service boot-failure-3: 26 assertions PASS
+CAN service bad-config-0: 8 assertions PASS
+CAN service bad-config-1: 8 assertions PASS
+CAN service bad-config-2: 8 assertions PASS
+CAN service bad-config-3: 8 assertions PASS
+CAN service bad-config-4: 8 assertions PASS
+CAN service bad-config-5: 8 assertions PASS
+CAN service bad-config-6: 8 assertions PASS
+CAN service init-fail-1: 14 assertions PASS
+CAN service init-fail-2: 17 assertions PASS
+CAN service init-fail-3: 19 assertions PASS
+CAN service init-fail-4: 20 assertions PASS
+CAN service HOST: 70 scenarios PASS
+
+SHA256 at validation (not a board-read firmware fingerprint):
+DB1C5138A7A7BF555942FA9197B3DA83A1AAEB901AEC80685724ACBA7DDECB90  FOC_T.ioc
+A44053CA10D3419BC8B4EF371716AC453979D5D6234C69716518E806248759B2  .mxproject
+08BE46D1E75B896517122BD175A4180A7C9077315F6E402BDD26D466000176EF  MDK-ARM/FOC_T.uvprojx
+483380840FFF773D046E345F683CF707BE47B02A4CA1166338A3ACC315CF0A6E  Core/Src/main.c
+D837BA882079268CC9D8EB3D9D0D85F28CF89CD462BE5748DCC641F9111514EE  Core/Inc/stm32h7xx_hal_conf.h
+E75ADD8A25E8EE7AF7BAF316CBA3C41CE37CA6BD9CEAFEA01CAB82FE2BEAB06F  Core/Src/rng.c
+2ECB93A266A135FCF4F4795117C532CF2AD2672B3FE267D2AEA0C34C563D71A7  Core/Inc/rng.h
+9BF2EA3790A4258F820D3C5AA5016CE8E8F7C6713D41B94224233EF34117CF41  Core/Src/app_runtime.c
+3E23E181AC418B837D4B3825ECBD4BA386F1174B987FDCC52ED1B7184F0D7358  Core/Inc/app_runtime.h
+B00ABD04FC8320FE6DB0293F47F5E5BA574E4FBEE5066B8312FBB3EC89C0489B  Core/Src/can_link.c
+C454563E628F217FB2A1DA0299AEAD346A05F3F5AF47E6BAFB0C98BCF8453DD3  Core/Inc/can_link.h
+DA740B07FD52C07014548D574260D1A8CBB9A36262E3DF6C3EAAF60AA72D9346  Core/Src/can_link_protocol.c
+279CF01F6C6EF68FC7D35D73DF7AC82F69283D22B9544502FD6431402DD0ADEA  Core/Inc/can_link_protocol.h
+7158EB39B94345EE700551BB341889EB482595A751179B6990C91A35133896D3  tests/run_runtime_boot_host.py
+605E7552F40BEBFA5B3FC1D593E436A9227E695678288F3CF2BAA7CEE7D2DAD4  tests/can_link_protocol_host.c
+66F54EE557ABD8724F61BA1CE6A16AFE995538FEAFC63C70B7468B32B4ADF42D  tests/can_link_service_host.c
+0FB66CC9095B03A8A63EEAFCAE976A8CB8D871ACB90C2A80E1967490E7E02555  tests/run-can-service-host.ps1
+B41E8CFCE6FD45D3FB43F42A1F04FF3598B9EB7B432BBD7FF9F59E7372114AC8  build/008-can-boot-identity/bench-build.txt
+15EC6561B63E85F0118221E3BC1B39E19DD271B029521EC612A6E2901E41AC73  build/008-can-boot-identity/normal-build.txt
+1920A9E2A7FD50D69B5603E933DD4DA23B9B20EF893320FC0F81EB47F056C1F9  build/008-can-boot-identity/runtime-host.txt
+2F0C86B343684D0A6F317A5D4E35DA45B57585496D989ECF18E6AD3F55DA6221  build/can-host/00804-protocol.log
+A95DD6DD072607AC63C45F0D30A5B2936909A4AF568F47EAE1C64A609076E0E3  build/can-host/00804-service.log
+C654E6F78FD00005C31850394CA5E54F599FCD13C305B9F2C245DA715B2FFC0A  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_rng.h
+F18E0447462136F618F876B6879848360E71F48D35BC5895198382B5EEF4709B  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_rng_ex.h
+8A105759DC1118FD0D38C1B011F4A2EA019B2AC70604D86585FAED6AE21BF41B  Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_rng.h
+813B1BB7AE8CADE02DDEE82FC72B1869F9E067BC5F9F67BCEF68FA926977CBF3  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_rng.c
+53BF2CB6E2A955173F8D863288877E2DD00B1457996673B57D2DE7807C4801E7  Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_rng_ex.c
+6FF4C202E17299BB7F2BABD344C1E2402206A212D99B116291813E04AF26E3EE  MDK-ARM/FOC_T/FOC_T.axf
+14D2152CF298D6CABF188EB3570D83C045ACDED12B656DA028B23FE31D72DA2F  MDK-ARM/FOC_T/FOC_T.hex
+EB2B0FE63599FCD2D733A2409974FE342DB46A7FE44AAD2F67F264606183F4C9  MDK-ARM/FOC_T/FOC_T.map
+1CD561D34115CB611838E3C46A3073336004F0EE0DB6185CE1CD10E8EE168235  MDK-ARM/FOC_T/FOC_T.sct
+3A256686088EC3CB476842722E70E5C643F347E5C98578FF402B21F961006302  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.axf
+A543FCA8C1212DC3C38BAC7C29CF7F2FBF14757705075E782476C76508FE13EE  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.hex
+EF7D3A18D8F79865F7D01287AB8B0DFBDF300836A2758CEA16659A77FD5F44E4  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.map
+1CD561D34115CB611838E3C46A3073336004F0EE0DB6185CE1CD10E8EE168235  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.sct
+SOURCE TREE MANIFEST SHA256 (190 c/h/s files; sorted relative path + space + fileSHA256 + LF): 8e211d5de9b018da5d4771762e8896038a5835566c7227a3230b79aacd56f44a
+DOC checks: 141 local paths exist; README<=100 lines; diff --check PASS.
+NEXT: spec008 10.8 first-round version/state +3 Watch, then same-boot/full128-bit and reset check. HW remains NOT_RUN.
+========== END 008.04 IMPLEMENTATION / BUILD / HOST ==========
+
+
+008.04 final formatting check (same firmware semantics, no extra build):
+- Restored original LF endings in handwritten app_runtime.c/h to avoid full-file
+  diff. Re-encoding current text to pre-build CRLF reproduces EXACT recorded
+  source hashes; production HOST block text is unchanged. This is only newline
+  normalization, not a post-validation firmware logic change.
+- Build-log excerpt trailing spaces normalized in the document; original build
+  logs remain unchanged and their recorded hashes still match.
+- Stale app_runtime line references in current architecture replaced by function
+  names; no other implementation changed during document finalization.
+Final LF source SHA256:
+AFD965BC16C9DB751BC5FC0154B5FF6B250E5199F0094E0CEF863282BB98DDB5  Core/Src/app_runtime.c
+FDDCC8C7DC04D9B02E87C258A57106306D55E63FEA2D4BA52098EC29B0C197FB  Core/Inc/app_runtime.h
+Final source-tree manifest SHA256: 11c04bc6466b4a00dd72920c3bc78cd5b0b9bdd8b7f442c233b95cf6a5053ed9
+
+
+========== 008.04 HW ROUND 1 USER REPORT (2026-11-17) ==========
+User statement: 没问题这个预期是一样的，进行下一步
+Interpreted against the immediately preceding explicit checklist:
+  Target instructed: FOC_T_CommandBench, power bus disconnected, controls/sensors only.
+  321:51 01 04 01 00 00 00 00 ->322:52 01 04 01 04 08 00 00 (BUILD804).
+  321:51 01 05 02 00 00 00 00 ->322:52 01 05 02 01 00 00 00 (VALID).
+  app_boot_identity_state=1, axis_command_applied_seq=0, board_output_enabled=0.
+Verdict: HW ROUND1 PASS (limited, user text confirmation of listed expectations).
+Evidence boundary: no new screenshot/trace, no board AXF/hash readback, no exact
+duration or statistical count. Interface804 is not a unique binary fingerprint.
+Reported conditions refer to the instructed setup, not an independent physical inspection.
+Complete128-bit same-boot/reset check: NOT_RUN / next.
+Randomness quality, failure injection, electrical output/protection, worst timing:
+NOT verified by this report. No CAN START/UPDATE implemented.
+Only README/ARCHITECTURE/spec008 and this evidence record updated this turn;
+no firmware change, build, download, staging or commit.
+========== END 008.04 HW ROUND 1 USER REPORT ==========
+
+
+========== 008.04 HW ROUND 2 / CHECKPOINT CLOSE (2026-11-17) ==========
+User supplied four screenshots; reply ID322, DLC8:
+  word0:52 01 06 03 7D 27 63 F4 ->0xF463277D
+  word1:52 01 07 04 CF B8 A6 3B ->0x3BA6B8CF
+  word2:52 01 08 05 E4 04 DE E7 ->0xE7DE04E4
+  word3:52 01 09 06 EA 48 F3 D6 ->0xD6F348EA
+Sources: codex-clipboard-2e034f02-f994-43bc-92ac-2bb1a8d2ee9c.png,
+cfb19d23-05fb-4234-b88f-cc03f33c3811.png,
+d418fcd1-0f1b-4c77-bb4f-04cc6310d535.png,
+8fe987f0-4dcd-410f-868d-82ee55fbc9ad.png (conversation attachments).
+Follow-up checklist: same-boot four words identical; actual MCU Reset+Run yields
+different complete128-bit value; Watch identity/applied_seq/output remain1/0/0.
+User then said: 可以了进行下一步
+Recorded as completion confirmation in that context, HW PASS LIMITED.
+Only first set has screenshots; second set bytes/Trace not supplied; not an
+independent measurement of entropy quality, startup count or hardware timing.
+008.04 finite low-rate power-disabled checkpoint closed; current source baseline
+still30aa8d1 plus uncommitted008.04. No assistant Git or hardware operation.
+
+008.05 DESIGN START:
+Existing ordinary result/result_seq can be overwritten by unaccepted rejection
+or idle STOP. Add12B latest ordinary handling receipt, written only upon pending
+processing/cancellation, not on accepted publication or active-only revocation.
+Owner TIM1; appTask reads coherent12B through new GetReceipt. Snapshot stays72B.
+This is neither an ACK queue nor a new control permission. No new CAN START/
+UPDATE or unbound receipt pages; protocol build805 identifies new implementation.
+Tests and evidence will follow here. No approval wait requested by user.
+========== END 008.04 CLOSE / 008.05 DESIGN ==========
+
+
+========== 008.05 IMPLEMENTATION / BUILD / HOST (2026-11-17) ==========
+Recorded: 2026-11-17T21:59:30.398604+08:00
+BASELINE: 30aa8d16ae7613ccfd3c64895d030ebcf155966f
+BRANCH: Xiao_ODrive
+WORKTREE: uncommitted008.04 RNG+queries/storage documentation retained;008.05
+adds ordinary handling receipt only. No Git stage/commit/push, no hardware action.
+IMPLEMENTATION: existing core c/h + port c/h + CAN protocol header (BUILD805).
+Existing core/port/CAN tests extended. No new file/task/dynamic allocation for008.05.
+Receipt12B(seq,result,control_seq); Snapshot72B unchanged. Only pending terminal
+handling writes receipt. APPLIED means core installed, not FOC/physical execution
+or current permit. Active-only revoke and unaccepted rejection do not overwrite.
+Single slot, no cross-reset storage, no CAN producer/query or ACK cache added.
+Independent source review: no new defect found. Trusted core metadata required.
+
+HOST COMMANDS (repository root; existing runners):
+  powershell -File tests/run-command-host.ps1
+  C:\Users\LEGION\AppData\Local\Programs\Python\Python310\python.exe tests/run_command_bench_host.py
+  powershell -File tests/run-can-host.ps1
+  powershell -File tests/run-can-service-host.ps1
+Source tests use actual core/port/FOC/board_safety with deterministic CPU/HAL stubs;
+not an ISR-duration, physical-output or real-CAN measurement.
+Old Cygwin FAST_CWD/Windows-path environmental warnings remain in original logs.
+Source compilation flags include -Werror; do not equate Keil0warning with HOST
+environment warning-free. Result excerpts (raw log hashes below):
+
+build/command-host/00805-receipt-host.log
+PASS: 13 scenarios, 612 assertions; synthetic HOST limits only.
+Boundary: sequential core tests do not prove Cortex-M7 PRIMASK timing or physical PWM safety.
+PASS: 407 FOC command integration assertions; CPU register stubs only
+HOST command and FOC integration suites PASS
+
+build/command-bench-host/00805-runner.log
+PASS: 8 bench sequencer groups / 139 assertions; real command core, simulated port.
+PASS: 77 real command port assertions (BENCH=0); deterministic CPU stubs only
+PASS: 399 real command port assertions (BENCH=1); deterministic CPU stubs only
+PASS: 102 safety profile assertions; actual board_safety.c with CPU register stubs only
+PROFILE PASS: default_normal
+PROFILE PASS: explicit_normal
+PROFILE PASS: normal_disabled
+PROFILE PASS: bench_disabled
+PROFILE PASS: bench_missing_power
+PROFILE PASS: bench_gpio
+PROFILE PASS: bench_always_on
+PROFILE PASS: invalid_bench_value
+PROFILE PASS: normal_always_on
+PASS: bench/port/safety suites + 9 profile cases; no hardware operation
+
+build/command-bench-host/host-results.txt
+
+build/008-command-receipt/protocol-host.txt
+CAN protocol HOST PASS: 84080 assertions
+HOST CAN protocol suite PASS
+
+build/008-command-receipt/service-host.txt
+CAN service valid: 37 assertions PASS
+CAN service lengths: 90 assertions PASS
+CAN service rejects: 54 assertions PASS
+CAN service busy: 27 assertions PASS
+CAN service rx-fail: 24 assertions PASS
+CAN service tx-fail: 30 assertions PASS
+CAN service errors: 28 assertions PASS
+CAN service busoff-ir: 24 assertions PASS
+CAN service busoff-psr: 23 assertions PASS
+CAN service ram-error: 24 assertions PASS
+CAN service bad-index: 21 assertions PASS
+CAN service overwrite: 21 assertions PASS
+CAN service query-valid: 93 assertions PASS
+CAN service query-status: 79 assertions PASS
+CAN service query-rejects: 114 assertions PASS
+CAN service query-dlc: 76 assertions PASS
+CAN service query-busy: 29 assertions PASS
+CAN service query-rx-fail: 26 assertions PASS
+CAN service query-tx-fail: 33 assertions PASS
+CAN service query-busoff: 21 assertions PASS
+CAN service no-provider: 10 assertions PASS
+CAN service stop-valid: 79 assertions PASS
+CAN service stop-ordering: 96 assertions PASS
+CAN service stop-tx-busy: 51 assertions PASS
+CAN service stop-tx-fail: 56 assertions PASS
+CAN service stop-rejected: 89 assertions PASS
+CAN service stop-invalid: 77 assertions PASS
+CAN service stop-dlc: 74 assertions PASS
+CAN service stop-busoff: 19 assertions PASS
+CAN service stop-rx-fail: 22 assertions PASS
+CAN service stop-no-provider: 6 assertions PASS
+CAN service stop-max-id: 54 assertions PASS
+CAN service stop-core-0: 77 assertions PASS
+CAN service stop-core-1: 73 assertions PASS
+CAN service stop-core-2: 70 assertions PASS
+CAN service stop-core-3: 71 assertions PASS
+CAN service target-valid: 87 assertions PASS
+CAN service target-rejects: 67 assertions PASS
+CAN service target-dlc: 73 assertions PASS
+CAN service target-missing: 7 assertions PASS
+CAN service target-bad-provider: 39 assertions PASS
+CAN service target-core: 135 assertions PASS
+CAN service stop-target-retained: 71 assertions PASS
+CAN service target-failure-0: 39 assertions PASS
+CAN service target-failure-1: 44 assertions PASS
+CAN service target-failure-2: 25 assertions PASS
+CAN service target-failure-3: 22 assertions PASS
+CAN service boot-state-0: 367 assertions PASS
+CAN service boot-state-1: 367 assertions PASS
+CAN service boot-state-2: 367 assertions PASS
+CAN service boot-rejects: 498 assertions PASS
+CAN service boot-dlc: 304 assertions PASS
+CAN service boot-missing: 7 assertions PASS
+CAN service boot-bad-provider: 147 assertions PASS
+CAN service stop-boot-retained: 117 assertions PASS
+CAN service boot-failure-0: 44 assertions PASS
+CAN service boot-failure-1: 49 assertions PASS
+CAN service boot-failure-2: 42 assertions PASS
+CAN service boot-failure-3: 26 assertions PASS
+CAN service bad-config-0: 8 assertions PASS
+CAN service bad-config-1: 8 assertions PASS
+CAN service bad-config-2: 8 assertions PASS
+CAN service bad-config-3: 8 assertions PASS
+CAN service bad-config-4: 8 assertions PASS
+CAN service bad-config-5: 8 assertions PASS
+CAN service bad-config-6: 8 assertions PASS
+CAN service init-fail-1: 14 assertions PASS
+CAN service init-fail-2: 17 assertions PASS
+CAN service init-fail-3: 19 assertions PASS
+CAN service init-fail-4: 20 assertions PASS
+CAN service HOST: 70 scenarios PASS
+CAN service total assertions: 4868
+
+FOC_T project sources: 64 C, 1 ASM, 0 C++.
+Defines: USE_PWR_LDO_SUPPLY,USE_HAL_DRIVER,STM32H750xx
+uC99=1
+uGnu=1
+uAC6=0; useUlib=1
+
+FOC_T_CommandBench project sources: 64 C, 1 ASM, 0 C++.
+Defines: USE_PWR_LDO_SUPPLY,USE_HAL_DRIVER,STM32H750xx,AXIS_COMMAND_BENCH_ENABLE=1,BOARD_POWER_STAGE_MODE=0
+uC99=1
+uGnu=1
+uAC6=0; useUlib=1
+
+BUILD COMMAND: D:\UV4\UV4.exe -b MDK-ARM\FOC_T.uvprojx -t FOC_T_CommandBench -o build/008-command-receipt/bench-build.txt
+Start-Process -WindowStyle Hidden -Wait; exit0. Incremental, targets sequential.
+*** Using Compiler 'V5.06 update 7 (build 960)', folder: 'D:\ARM\ARMCC\Bin'
+Build target 'FOC_T_CommandBench'
+compiling can_link_protocol.c...
+compiling axis_command_bench.c...
+compiling axis_command_core.c...
+compiling open_foc.c...
+compiling can_link.c...
+compiling axis_command.c...
+compiling app_runtime.c...
+linking...
+Program Size: Code=64324 RO-data=904 RW-data=904 ZI-data=25040
+FromELF: creating hex file...
+"FOC_T_CommandBench\FOC_T_CommandBench.axf" - 0 Error(s), 0 Warning(s).
+Build Time Elapsed:  00:00:29
+MAP excerpts:
+    Removing axis_command.o(i.AxisCommandPort_GetReceipt), (64 bytes).
+    command_core                             0x24000388   Data         160  axis_command.o(.bss)
+    ucHeap                                   0x24001558   Data       16384  heap_4.o(.bss)
+    __initial_sp                             0x24006558   Data           0  startup_stm32h750xx.o(STACK)
+    Execution Region ER_IROM1 (Exec base: 0x08000000, Load base: 0x08000000, Size: 0x0000fecc, Max: 0x00020000, ABSOLUTE)
+    Execution Region RW_IRAM1 (Exec base: 0x20000000, Load base: 0x0800fecc, Size: 0x00000000, Max: 0x00020000, ABSOLUTE)
+    Execution Region RW_IRAM2 (Exec base: 0x24000000, Load base: 0x0800fecc, Size: 0x00006558, Max: 0x00080000, ABSOLUTE, COMPRESSED[0x0000006c])
+    Total RO  Size (Code + RO Data)                65228 (  63.70kB)
+    Total RW  Size (RW Data + ZI Data)             25944 (  25.34kB)
+    Total ROM Size (Code + RO Data + RW Data)      65336 (  63.80kB)
+
+BUILD COMMAND: D:\UV4\UV4.exe -b MDK-ARM\FOC_T.uvprojx -t FOC_T -o build/008-command-receipt/normal-build.txt
+Start-Process -WindowStyle Hidden -Wait; exit0. Incremental, targets sequential.
+*** Using Compiler 'V5.06 update 7 (build 960)', folder: 'D:\ARM\ARMCC\Bin'
+Build target 'FOC_T'
+compiling axis_command_bench.c...
+compiling can_link_protocol.c...
+compiling axis_command_core.c...
+compiling open_foc.c...
+compiling axis_command.c...
+compiling freertos.c...
+compiling main.c...
+compiling app_runtime.c...
+linking...
+Program Size: Code=60552 RO-data=904 RW-data=792 ZI-data=24984
+FromELF: creating hex file...
+"FOC_T\FOC_T.axf" - 0 Error(s), 0 Warning(s).
+Build Time Elapsed:  00:00:31
+MAP excerpts:
+    Removing axis_command.o(i.AxisCommandPort_GetReceipt), (64 bytes).
+    command_core                             0x24000318   Data         160  axis_command.o(.bss)
+    ucHeap                                   0x240014b0   Data       16384  heap_4.o(.bss)
+    __initial_sp                             0x240064b0   Data           0  startup_stm32h750xx.o(STACK)
+    Execution Region ER_IROM1 (Exec base: 0x08000000, Load base: 0x08000000, Size: 0x0000f010, Max: 0x00020000, ABSOLUTE)
+    Execution Region RW_IRAM1 (Exec base: 0x20000000, Load base: 0x0800f010, Size: 0x00000000, Max: 0x00020000, ABSOLUTE)
+    Execution Region RW_IRAM2 (Exec base: 0x24000000, Load base: 0x0800f010, Size: 0x000064b0, Max: 0x00080000, ABSOLUTE, COMPRESSED[0x00000064])
+    Total RO  Size (Code + RO Data)                61456 (  60.02kB)
+    Total RW  Size (RW Data + ZI Data)             25776 (  25.17kB)
+    Total ROM Size (Code + RO Data + RW Data)      61556 (  60.11kB)
+
+LAYOUT: internalFlash128KiB; DTCM0B; AXI512KiB; heap16384B; MSP4096B;
+appTask4096B stack allocated from heap, not counted twice. No externalFlash.
+Normal ROM61556/RW+ZI25776; Bench ROM65336/RW+ZI25944. Compared with008.04:
+each ROM+48B/staticRAM net+8B; core member12B and Core160B, linked layout has padding.
+GetReceipt compiles but is unused and removed in both images. No current
+firmware runtime caller exercises its critical section; HOST uses real function.
+HW008.05: NOT_RUN. Old008.04 limited board observation does not verify this build.
+No new timing/stack/physical output guarantee. Complete transaction, original
+RX timestamp age and final permit guard remain required before CAN START/UPDATE.
+
+SHA256 inputs/logs/artifacts (not board-read fingerprints):
+70D8731063665389DFAE7D2EA746CD3420F8364D6D00D20B9C6EBD36AC5FD11E  Core/Inc/axis_command_core.h
+4FE3613376F6BA53E6B0893C8A54F0CBF965D003C46DBE84A28B7C4BDAA39F0B  Core/Src/axis_command_core.c
+9EBBD0292F3CCE37A9DF0CDD9FFA840E78EC4935641D76F6BA5A8497BCDC8B3D  Core/Inc/axis_command.h
+34DFAD93BC5CB02EA3751B2214F8271995361436F9AC9A195C075862489C7A92  Core/Src/axis_command.c
+DAC7FCFB3E94112A0B1B34DFC7CB1930557BED55CC2ADCE5308F088EFD80BA65  Core/Inc/can_link_protocol.h
+E83B314A989AC200DA0351A3451692DE27BF72EB8424EE4E3E8622A8F4BF5917  tests/axis_command_host_tests.c
+AD1CD69262098FABA596742FEEA84A9BB655FD683D6AD595E84D48CD44614D30  tests/axis_command_port_host.c
+2E22592E291B8D0AE6584B8C823178F6EB5585D9319BF7EE2C31941769BDB117  tests/can_link_protocol_host.c
+891CFBA3456119EB874689598B00C792AF6038488EF7D05D5AC7D17C3175DFCF  tests/can_link_service_host.c
+50ACBC1A12E3F72D8629CD7707A60420A4E5BBF5D17F75E16414620E0E8B852E  tests/run-command-host.ps1
+DFE7E26B62FA0B99A4191B5381F265B0F512EBA70F032899108489A19F6F4C76  tests/run_command_bench_host.py
+49DAB1085FA0145EE048F6F6A96B71512BB179148C1B95A19B85F9839A5D53D0  tests/run-can-host.ps1
+0FB66CC9095B03A8A63EEAFCAE976A8CB8D871ACB90C2A80E1967490E7E02555  tests/run-can-service-host.ps1
+DB1C5138A7A7BF555942FA9197B3DA83A1AAEB901AEC80685724ACBA7DDECB90  FOC_T.ioc
+CA2B75F261784B94A56C9F55127AC09E181F885CDCF3221680915D254050706F  MDK-ARM/FOC_T.uvprojx
+E42BCC5A78595D5A5DC61A04D35396D1A2A8003AFD4BAEE304C547282A152FE2  MDK-ARM/FOC_T.uvoptx
+D076DE385F19C23F7317CB2FFE477AD47B4FC7CF5C0045E649F58DAB7C586708  build/command-host/00805-receipt-host.log
+56C0E1ED2B39032E1F4A49619A58FCF49F952E00EE80D92FD2E43BB3B94EEA4E  build/command-bench-host/00805-runner.log
+B8D441EEC12B5F417CB9D06B2D431B6389EAD3A87289CD41510E8457AF06E726  build/command-bench-host/host-results.txt
+FFF3F2FF3FB14C1F7B5FF14170F1C7A7AB404B9804FBC313017B22FE738A83D0  build/008-command-receipt/protocol-host.txt
+68F6709DC86F40F29D70E2C665CD016F79848302459D7C8297AE32B29BFB78AC  build/008-command-receipt/service-host.txt
+297FB7FC35B9AFB64539A28744B8AF00F61B88864DD1843C27F5B8ED28A20E81  build/008-command-receipt/bench-build.txt
+94C10BFD1740E6930E870C1A365E997A6001A78235999E99C8ABE102D00C462E  build/008-command-receipt/normal-build.txt
+EF2A17F62FA922F93500CA86282059E85671962D4DD0F73E1E33EC4FD7EF94EF  MDK-ARM/FOC_T/FOC_T.axf
+B518988308CFFC7DDD42D75A44C83DCAAF13B25738FDC93713030C9CADE1C4AD  MDK-ARM/FOC_T/FOC_T.hex
+F83D81D6E8B5748DF6B9C74C06DD7822C1B22871CCCF8D04FB4ED2C4FBFA2B18  MDK-ARM/FOC_T/FOC_T.map
+1CD561D34115CB611838E3C46A3073336004F0EE0DB6185CE1CD10E8EE168235  MDK-ARM/FOC_T/FOC_T.sct
+00F8712DDAE527758622833A19712CE9023ED7E6A8D5458E580BDA14970049FA  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.axf
+0C3120C9998BE778E2DE45813B0B86CEA04B5680300E5F86D16E799483C4758D  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.hex
+F6E24D70F60C7EB91F779BF82D375BFC7A7AF6FB5518CBE57D5029825AE24DC2  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.map
+1CD561D34115CB611838E3C46A3073336004F0EE0DB6185CE1CD10E8EE168235  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.sct
+SOURCE MANIFEST (190 c/h/s inputs; Core/Drivers/Middlewares + startup; sorted path + uppercaseSHA +LF): D8710DA4D4AD9830A2E270613C1F33CC66A36029563705E1A0E49B6CD8F620B4
+uvoptx is local user/tool debugging state, observed/hash only; not manually edited.
+User next: optional new-image version smoke on disabled-output Bench:
+321:51 01 04 01 00 00 00 00 ->322:52 01 04 01 05 08 00 00.
+This smoke alone cannot validate receipt processing. No repeated zero-Watch gate.
+========== END 008.05 IMPLEMENTATION / BUILD / HOST ==========
+
+008.05 documentation final check:
+Independent review corrected current-evidence navigation007->008 and old005 heap/
+MSP address reference->008.05 maps. No firmware edits after successful builds.
+Local document links verified: 120; README52 lines; diff --check PASS.
+MSP map FOC_T:
+    startup_stm32h750xx.o(RESET) refers to startup_stm32h750xx.o(STACK) for __initial_sp
+    entry2.o(.ARM.Collect$$$$00002712) refers to startup_stm32h750xx.o(STACK) for __initial_sp
+    entry2.o(__vectab_stack_and_reset_area) refers to startup_stm32h750xx.o(STACK) for __initial_sp
+    STACK                                    0x240054b0   Section     4096  startup_stm32h750xx.o(STACK)
+    __initial_sp                             0x240064b0   Data           0  startup_stm32h750xx.o(STACK)
+    0x240054b0        -       0x00001000   Zero   RW            1    STACK               startup_stm32h750xx.o
+MSP map FOC_T_CommandBench:
+    startup_stm32h750xx.o(RESET) refers to startup_stm32h750xx.o(STACK) for __initial_sp
+    entry2.o(.ARM.Collect$$$$00002712) refers to startup_stm32h750xx.o(STACK) for __initial_sp
+    entry2.o(__vectab_stack_and_reset_area) refers to startup_stm32h750xx.o(STACK) for __initial_sp
+    STACK                                    0x24005558   Section     4096  startup_stm32h750xx.o(STACK)
+    __initial_sp                             0x24006558   Data           0  startup_stm32h750xx.o(STACK)
+    0x24005558        -       0x00001000   Zero   RW            1    STACK               startup_stm32h750xx.o
+
+
+========== 008.05 VERSION SMOKE USER REPORT / 008.06 DESIGN (2026-11-18) ==========
+User: 没问题进行下一步
+Context: prior explicit Bench version check
+321:51 01 04 01 00 00 00 00 ->322:52 01 04 01 05 08 00 00.
+Record: version-response smoke PASS LIMITED, user text confirmation; no fresh
+Trace/screenshot or board binary hash. Internal receipt HW/timing NOT_RUN.
+008.06 design recorded in spec008 section12 before firmware edits:
+hardware timestamp+sticky service-timeout observation, no control Submit.
+6250 CAN timestamp ticks is nominal200ms service-gap budget, not motor lease.
+8-slot blocking FIFO bounded progress required to disambiguate16-bit RxTimestamp.
+Implementation/HOST/BUILD/HW results pending. No new module or task planned.
+========== END REPORT / DESIGN ==========
+
+
+========== 008.06 IMPLEMENTATION / BUILD / HOST (2026-11-18 client date) ==========
+BASELINE:Xiao_ODrive/30aa8d1 plus uncommitted008.04/05 and current008.06.
+4 existing CAN product +4 existing HOST +4 existing docs/evidence files modified.
+New files/tasks0; no IOC/RTOS/Axis/FOC/output/linker/CCU config change.
+No stage/commit/push or hardware action.
+Private appTask time state/mirror; internal timestampPRESC16; timeout6250ticks.
+Service200ms nominal is not motor lease. NEVER clear TOO, never reset TSCV in Poll.
+Initial FIFO must be empty; 8-slot blocking progress and9*6250+16<65536 bound
+disambiguate modulo age. Observing configuration, timeout, RX loss/failure or
+fatal link causes sticky lost time. Unknown ageUINT32_MAX, no runtime recovery.
+Time-only fault does not increment legacy link error count; diagnostics continue
+if transport healthy. Legacy fatal link errors still stop communication.
+No ordinary Submit/session or final TIM1 age guard implemented.
+SRC independent read-only review: no must-fix defect; tests use real service.
+CCU requiresBCC1/CDIV0/SWR0; read-only check. RM0433 reset/default descriptions
+conflict; actual board CCFG unknown. User2026-11-18:我现在不在工位上面那我明天测试一下
+HW008.06 NOT_RUN; planned2026-11-19. No clock scale, pause latency, load, stack
+or physical output assurance from HOST or historical board reports.
+HOST register/time injection proves branch behavior, not silicon or FIFO model.
+Commands:
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/run-can-host.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/run-can-service-host.ps1
+Old Cygwin FAST_CWD environment warnings retained; not target compiler warnings.
+
+build/008-can-timebase/protocol.log
+CAN protocol HOST PASS: 89573 assertions
+HOST CAN protocol suite PASS
+
+build/008-can-timebase/service.log
+CAN service valid: 61 assertions PASS
+CAN service lengths: 170 assertions PASS
+CAN service rejects: 104 assertions PASS
+CAN service busy: 51 assertions PASS
+CAN service rx-fail: 42 assertions PASS
+CAN service tx-fail: 50 assertions PASS
+CAN service errors: 44 assertions PASS
+CAN service busoff-ir: 40 assertions PASS
+CAN service busoff-psr: 38 assertions PASS
+CAN service ram-error: 40 assertions PASS
+CAN service bad-index: 39 assertions PASS
+CAN service overwrite: 39 assertions PASS
+CAN service query-valid: 137 assertions PASS
+CAN service query-status: 119 assertions PASS
+CAN service query-rejects: 209 assertions PASS
+CAN service query-dlc: 156 assertions PASS
+CAN service query-busy: 53 assertions PASS
+CAN service query-rx-fail: 44 assertions PASS
+CAN service query-tx-fail: 53 assertions PASS
+CAN service query-busoff: 36 assertions PASS
+CAN service no-provider: 10 assertions PASS
+CAN service stop-valid: 123 assertions PASS
+CAN service stop-ordering: 146 assertions PASS
+CAN service stop-tx-busy: 85 assertions PASS
+CAN service stop-tx-fail: 90 assertions PASS
+CAN service stop-rejected: 134 assertions PASS
+CAN service stop-invalid: 152 assertions PASS
+CAN service stop-dlc: 154 assertions PASS
+CAN service stop-busoff: 34 assertions PASS
+CAN service stop-rx-fail: 40 assertions PASS
+CAN service stop-no-provider: 6 assertions PASS
+CAN service stop-max-id: 89 assertions PASS
+CAN service stop-core-0: 112 assertions PASS
+CAN service stop-core-1: 108 assertions PASS
+CAN service stop-core-2: 105 assertions PASS
+CAN service stop-core-3: 106 assertions PASS
+CAN service target-valid: 131 assertions PASS
+CAN service target-rejects: 132 assertions PASS
+CAN service target-dlc: 153 assertions PASS
+CAN service target-missing: 7 assertions PASS
+CAN service target-bad-provider: 64 assertions PASS
+CAN service target-core: 200 assertions PASS
+CAN service stop-target-retained: 111 assertions PASS
+CAN service target-failure-0: 68 assertions PASS
+CAN service target-failure-1: 73 assertions PASS
+CAN service target-failure-2: 43 assertions PASS
+CAN service target-failure-3: 37 assertions PASS
+CAN service boot-state-0: 486 assertions PASS
+CAN service boot-state-1: 486 assertions PASS
+CAN service boot-state-2: 486 assertions PASS
+CAN service boot-rejects: 913 assertions PASS
+CAN service boot-dlc: 644 assertions PASS
+CAN service boot-missing: 7 assertions PASS
+CAN service boot-bad-provider: 212 assertions PASS
+CAN service stop-boot-retained: 177 assertions PASS
+CAN service boot-failure-0: 73 assertions PASS
+CAN service boot-failure-1: 78 assertions PASS
+CAN service boot-failure-2: 60 assertions PASS
+CAN service boot-failure-3: 41 assertions PASS
+CAN service bad-config-0: 8 assertions PASS
+CAN service bad-config-1: 8 assertions PASS
+CAN service bad-config-2: 8 assertions PASS
+CAN service bad-config-3: 8 assertions PASS
+CAN service bad-config-4: 8 assertions PASS
+CAN service bad-config-5: 8 assertions PASS
+CAN service bad-config-6: 8 assertions PASS
+CAN service init-fail-1: 14 assertions PASS
+CAN service init-fail-2: 17 assertions PASS
+CAN service init-fail-3: 19 assertions PASS
+CAN service init-fail-4: 30 assertions PASS
+CAN service time-normal: 99 assertions PASS
+CAN service time-metadata: 138 assertions PASS
+CAN service time-progress: 163 assertions PASS
+CAN service time-watch: 82 assertions PASS
+CAN service time-nonfatal: 78 assertions PASS
+CAN service time-core: 96 assertions PASS
+CAN service stop-time-compatible: 103 assertions PASS
+CAN service time-sticky-0: 88 assertions PASS
+CAN service time-sticky-1: 85 assertions PASS
+CAN service time-init-fail-1: 49 assertions PASS
+CAN service time-init-fail-2: 51 assertions PASS
+CAN service time-init-fail-3: 53 assertions PASS
+CAN service time-init-fail-4: 54 assertions PASS
+CAN service time-init-fail-5: 55 assertions PASS
+CAN service time-init-fail-6: 57 assertions PASS
+CAN service time-bad-effect-1: 40 assertions PASS
+CAN service time-bad-effect-2: 40 assertions PASS
+CAN service time-bad-effect-3: 40 assertions PASS
+CAN service time-bad-effect-4: 40 assertions PASS
+CAN service time-init-boundary-0: 44 assertions PASS
+CAN service time-init-boundary-1: 42 assertions PASS
+CAN service time-init-boundary-2: 45 assertions PASS
+CAN service time-config-0: 49 assertions PASS
+CAN service time-config-1: 49 assertions PASS
+CAN service time-config-2: 49 assertions PASS
+CAN service time-config-3: 49 assertions PASS
+CAN service time-config-4: 49 assertions PASS
+CAN service time-config-5: 49 assertions PASS
+CAN service time-config-6: 49 assertions PASS
+CAN service time-config-7: 49 assertions PASS
+CAN service time-config-8: 49 assertions PASS
+CAN service time-config-9: 49 assertions PASS
+CAN service time-config-10: 49 assertions PASS
+CAN service time-config-11: 49 assertions PASS
+CAN service time-config-12: 49 assertions PASS
+CAN service time-config-13: 49 assertions PASS
+CAN service time-config-14: 49 assertions PASS
+CAN service time-config-15: 49 assertions PASS
+CAN service time-config-16: 49 assertions PASS
+CAN service time-config-17: 49 assertions PASS
+CAN service time-config-18: 49 assertions PASS
+CAN service time-config-19: 49 assertions PASS
+CAN service time-config-20: 49 assertions PASS
+CAN service time-config-21: 50 assertions PASS
+CAN service time-config-22: 50 assertions PASS
+CAN service time-config-23: 49 assertions PASS
+CAN service time-config-24: 49 assertions PASS
+CAN service time-config-25: 49 assertions PASS
+CAN service time-geometry-0: 43 assertions PASS
+CAN service time-geometry-1: 43 assertions PASS
+CAN service time-geometry-2: 43 assertions PASS
+CAN service time-geometry-3: 43 assertions PASS
+CAN service time-geometry-4: 43 assertions PASS
+CAN service time-geometry-5: 43 assertions PASS
+CAN service time-geometry-6: 43 assertions PASS
+CAN service time-geometry-7: 43 assertions PASS
+CAN service time-edge-0: 55 assertions PASS
+CAN service time-edge-1: 57 assertions PASS
+CAN service time-edge-2: 57 assertions PASS
+CAN service time-edge-3: 58 assertions PASS
+CAN service time-edge-4: 58 assertions PASS
+CAN service time-edge-5: 58 assertions PASS
+CAN service time-edge-6: 59 assertions PASS
+CAN service time-edge-7: 60 assertions PASS
+CAN service time-edge-8: 59 assertions PASS
+CAN service time-edge-9: 59 assertions PASS
+CAN service time-edge-10: 59 assertions PASS
+CAN service time-edge-11: 57 assertions PASS
+CAN service time-edge-12: 55 assertions PASS
+CAN service time-edge-13: 57 assertions PASS
+CAN service time-failure-0: 50 assertions PASS
+CAN service time-failure-1: 47 assertions PASS
+CAN service time-failure-2: 50 assertions PASS
+CAN service time-failure-3: 41 assertions PASS
+CAN service time-failure-4: 41 assertions PASS
+CAN service time-failure-5: 41 assertions PASS
+CAN service time-failure-6: 39 assertions PASS
+CAN service HOST: 147 scenarios PASS
+Service assertion total:12116
+
+BUILD:D:\UV4\UV4.exe -b MDK-ARM\FOC_T.uvprojx -t FOC_T_CommandBench -o build/008-can-timebase/bench-build.txt
+Start-Process -WindowStyle Hidden -Wait; sequential incremental; exit0.
+*** Using Compiler 'V5.06 update 7 (build 960)', folder: 'D:\ARM\ARMCC\Bin'
+Build target 'FOC_T_CommandBench'
+compiling can_link_protocol.c...
+compiling can_link.c...
+compiling app_runtime.c...
+linking...
+Program Size: Code=65400 RO-data=904 RW-data=928 ZI-data=25040
+FromELF: creating hex file...
+"FOC_T_CommandBench\FOC_T_CommandBench.axf" - 0 Error(s), 0 Warning(s).
+Build Time Elapsed:  00:00:17
+MAP:
+    ucHeap                                   0x24001570   Data       16384  heap_4.o(.bss)
+    STACK                                    0x24005570   Section     4096  startup_stm32h750xx.o(STACK)
+    __initial_sp                             0x24006570   Data           0  startup_stm32h750xx.o(STACK)
+    Execution Region ER_IROM1 (Exec base: 0x08000000, Load base: 0x08000000, Size: 0x00010300, Max: 0x00020000, ABSOLUTE)
+    Execution Region RW_IRAM1 (Exec base: 0x20000000, Load base: 0x08010300, Size: 0x00000000, Max: 0x00020000, ABSOLUTE)
+    Execution Region RW_IRAM2 (Exec base: 0x24000000, Load base: 0x08010300, Size: 0x00006570, Max: 0x00080000, ABSOLUTE, COMPRESSED[0x00000074])
+    0x24005570        -       0x00001000   Zero   RW            1    STACK               startup_stm32h750xx.o
+    Total RO  Size (Code + RO Data)                66304 (  64.75kB)
+    Total RW  Size (RW Data + ZI Data)             25968 (  25.36kB)
+    Total ROM Size (Code + RO Data + RW Data)      66420 (  64.86kB)
+
+BUILD:D:\UV4\UV4.exe -b MDK-ARM\FOC_T.uvprojx -t FOC_T -o build/008-can-timebase/normal-build.txt
+Start-Process -WindowStyle Hidden -Wait; sequential incremental; exit0.
+*** Using Compiler 'V5.06 update 7 (build 960)', folder: 'D:\ARM\ARMCC\Bin'
+Build target 'FOC_T'
+compiling can_link.c...
+compiling can_link_protocol.c...
+linking...
+Program Size: Code=60552 RO-data=904 RW-data=792 ZI-data=24984
+FromELF: creating hex file...
+"FOC_T\FOC_T.axf" - 0 Error(s), 0 Warning(s).
+Build Time Elapsed:  00:00:02
+MAP:
+    ucHeap                                   0x240014b0   Data       16384  heap_4.o(.bss)
+    STACK                                    0x240054b0   Section     4096  startup_stm32h750xx.o(STACK)
+    __initial_sp                             0x240064b0   Data           0  startup_stm32h750xx.o(STACK)
+    Execution Region ER_IROM1 (Exec base: 0x08000000, Load base: 0x08000000, Size: 0x0000f010, Max: 0x00020000, ABSOLUTE)
+    Execution Region RW_IRAM1 (Exec base: 0x20000000, Load base: 0x0800f010, Size: 0x00000000, Max: 0x00020000, ABSOLUTE)
+    Execution Region RW_IRAM2 (Exec base: 0x24000000, Load base: 0x0800f010, Size: 0x000064b0, Max: 0x00080000, ABSOLUTE, COMPRESSED[0x00000064])
+    0x240054b0        -       0x00001000   Zero   RW            1    STACK               startup_stm32h750xx.o
+    Total RO  Size (Code + RO Data)                61456 (  60.02kB)
+    Total RW  Size (RW Data + ZI Data)             25776 (  25.17kB)
+    Total ROM Size (Code + RO Data + RW Data)      61556 (  60.11kB)
+BenchROM66420/staticRAM25968 (+1084/+24 vs805); normal61556/25776 unchanged.
+DTCM0; internalFlash128KiB/AXI512KiB; heap16384/MSP4096; appTask4096 from heap.
+Both targets64C+1ASM/noC++; Bench macros AXIS_COMMAND_BENCH_ENABLE=1,BOARD_POWER_STAGE_MODE=0.
+Own static stack frames:CanLink_Poll160,CheckTime16,TimeConfigurationValid16,
+ObserveRxAge16,ReloadServiceTimer8 B. Not worst task+indirect callbacks/IRQ stack.
+Current008.06 HW untested;805 version smoke does not cover this image.
+Hash inputs/logs/artifacts (not board-read fingerprints):
+4D95DB8B7BB50676FB92BA928AC83A90B438B04F1C149F2DDA5C37FB411CA5EB  Core/Inc/can_link.h
+8AA5FA70E4D972DA3C38C0497D197BF3B735461D2FA22BC801FC3E3448943BD2  Core/Src/can_link.c
+FC041A2171F74521939B04B17A0D24CB2BF1A2DA03F59F1A686109E5547A6A4B  Core/Inc/can_link_protocol.h
+805BDD41F11C89AE45A646FFEC56B0579D8CA841FB6B50B8CF93960431AD9F3E  Core/Src/can_link_protocol.c
+AD854825CD984AFBFE1BFD96375A79BE6D44E0B55D89DEE3F98F97D1CFA51BB3  tests/can_link_stubs/fdcan.h
+A38F96BCC48BFFC250A6B40D759404BF4132D336D72A7ADC2C1C6C741711F770  tests/can_link_service_host.c
+082C0A79D43A7E0D63556336EEFADCED242EF8F9994A66C859E67559683475EB  tests/can_link_protocol_host.c
+5C30622205A65F3501A2117FE3D70236CF43399B75692ACFF5D16D8A29587900  tests/run-can-service-host.ps1
+49DAB1085FA0145EE048F6F6A96B71512BB179148C1B95A19B85F9839A5D53D0  tests/run-can-host.ps1
+DB1C5138A7A7BF555942FA9197B3DA83A1AAEB901AEC80685724ACBA7DDECB90  FOC_T.ioc
+CA2B75F261784B94A56C9F55127AC09E181F885CDCF3221680915D254050706F  MDK-ARM/FOC_T.uvprojx
+9C4ED143A6F0E9C735B8B4A9400968410CD9645667D610B0DDA38A9BE9CBEC08  MDK-ARM/FOC_T.uvoptx
+BD3011771C91D76FE6C7415F816B7EE6EB0310D54A8E73BC4FBC0792A69CF4BF  build/008-can-timebase/protocol.log
+4D0F1536C1E7AC8D0310A4F0D0494AD890B7912DFCC3AD9263F4F997F5091F61  build/008-can-timebase/service.log
+BAD82A0495B4C0935CE08014501D006D1310C8DE9E25C9C60E3A2D7ECB6FE96F  build/008-can-timebase/bench-build.txt
+DA3E40CF2EC19ADA978E2B05FF4EAB59C0B71E64F2D71140DE81FF3168CB725B  build/008-can-timebase/normal-build.txt
+EF2A17F62FA922F93500CA86282059E85671962D4DD0F73E1E33EC4FD7EF94EF  MDK-ARM/FOC_T/FOC_T.axf
+B518988308CFFC7DDD42D75A44C83DCAAF13B25738FDC93713030C9CADE1C4AD  MDK-ARM/FOC_T/FOC_T.hex
+F83D81D6E8B5748DF6B9C74C06DD7822C1B22871CCCF8D04FB4ED2C4FBFA2B18  MDK-ARM/FOC_T/FOC_T.map
+1CD561D34115CB611838E3C46A3073336004F0EE0DB6185CE1CD10E8EE168235  MDK-ARM/FOC_T/FOC_T.sct
+52CDDF3C2A9642B329F2BC6E8EED23A36186142C067EEC3A008E438C5406B434  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.axf
+4F2EE4FB9BF82E2C3687B1FEFEBE476E88C8520C2AE3A030155A08FECDE164A3  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.hex
+FE5355769F892EA7CD795D535E38B38A76FA8F4489038CAC26DD0AC933AC528E  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.map
+1CD561D34115CB611838E3C46A3073336004F0EE0DB6185CE1CD10E8EE168235  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.sct
+SOURCE MANIFEST (190 c/h/s, sorted relative path+space+uppercaseSHA+LF):6EECD5A678BA097B2E7C18096F4CCD5096382FCC8C9E37F4CCE8906D443D808D
+uvoptx unchanged9C4ED143A6F0E9C735B8B4A9400968410CD9645667D610B0DDA38A9BE9CBEC08; observed only.
+Final docs:123 local links exist, README53 lines, diff checkPASS; current filesCRLF preserved.
+Earlier evidence append process exited -1 before writing; absence verified, then
+this appendix written from completed raw logs. Firmware/tests were unaffected.
+========== END 008.06 IMPLEMENTATION / BUILD / HOST ==========
+
+
+========== 008.06 LIMITED HARDWARE CHECKPOINT / session date 2026-11-18 ==========
+Scope: documentation/evidence only; no source/test/IOC/linker edits, no rebuild,
+no agent-driven download/reset/power operation, no Git stage/commit.
+Baseline: Xiao_ODrive / 30aa8d1 plus existing 008.04-06 worktree.
+Conditions carried from user test: FOC_T_CommandBench, power bus disconnected,
+control/sensors powered; PCAN Classic CAN500k, standard ID321/322, DLC8.
+No independent board fingerprint or new raw BUILD008.06 reply was supplied.
+
+Evidence 1 (user Watch screenshot):
+CCFG=0x00000444; can_link_time_diag.state=1; last_rx_age_us=0x320.
+CCFG masked BCC/CDIV/SWR equals BCC; age=800 nominal us.
+Attachment: C:/Users/LEGION/AppData/Local/Temp/codex-clipboard-acfd017f-9974-40e8-8800-6b80c7e4f249.png
+SHA256:866FBD11137616616BB537B3EC3D3B4113B274D03F8051A514818F0A970CF4CC
+
+Evidence 2 (user text, no start/end counter screenshot):
+Asked: continuous Run about20s, PING1000ms, state1, finite age,
+app_task_deadline_misses no increase.
+Reply: 没问题，下一步吧
+Result: limited low-load observation confirmed by user.
+
+Evidence 3 (user text, not independent per-stage register capture):
+Asked: stop periodic sends; Halt about3s -> Run; expected state2/reason includes1,
+ageFFFFFFFF; then MCU Reset -> Run and fresh frame -> state1/reason0/finite age.
+Reply: 前两个参数都如预期一样，第三个参数last_rx_age_us一直都是0xFFFFFFFF
+State/reason behavior recorded as contextual user confirmation.
+Old Watch age display cause remains UNKNOWN; not attributed to stale UI as fact.
+
+Evidence 4 (new token query, user screenshot after reset/run instructions):
+Requested standard321 DLC8: 51 01 0B 21 00 00 00 00
+Observed standard322 length8: 52 01 0B 21 E0 02 00 00
+LE32 E0 02 00 00 = 0x2E0 = 736 nominal us = 23 nominal32us ticks.
+Attachment: C:/Users/LEGION/AppData/Local/Temp/codex-clipboard-9ef7e6d1-9d6b-4697-bfae-3f30c00d58a4.png
+SHA256:2C392A15310DA2D978DEDBB179913F7ED61524E97E54FE48A8C1C120C65C30EA
+PCAN display Count226/Cycle561114.7 are not used as latency/loss/runtime evidence.
+This reply proves private age was finite when handling that query.
+It does not independently prove exact reset sequence or earlier Watch behavior.
+Temporary attachment paths/hashes identify conversation evidence; images not copied
+into repository and may expire. Observed values are transcribed above.
+
+Source association: rechecked all190 entries against existing source-manifest.txt,
+SHA256:6EECD5A678BA097B2E7C18096F4CCD5096382FCC8C9E37F4CCE8906D443D808D.
+No source mismatch; earlier HOST/BUILD evidence retained, not rerun for docs.
+HW PASS (LIMITED): config/age screenshots plus contextual normal/pause/reset
+user confirmation. No independent clock calibration, exact200ms threshold,
+worst latency/stack/full-load, board artifact identity or output safety proof.
+START/UPDATE and runtime hardware-time final permission remain unimplemented.
+Next: user manual commit; then spec10.7 full transaction, ingress-time propagation
+through Submit/BeginCycle/FinalPermit and cached command result.
+========== END 008.06 LIMITED HARDWARE CHECKPOINT ==========

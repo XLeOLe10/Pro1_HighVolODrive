@@ -11,9 +11,19 @@
 #define CAN_QUERY_STATUS   0x02U
 #define CAN_QUERY_FAULT    0x03U
 #define CAN_QUERY_BUILD    0x04U
-#define CAN_QUERY_INFO_VALUE     0x0001007FUL
-/* Manual interface release 008.03; NOT an automatically generated image hash. */
-#define CAN_QUERY_BUILD_REVISION 0x00000803UL
+#define CAN_QUERY_BOOT_STATE 0x05U
+#define CAN_QUERY_BOOT_WORD0 0x06U
+#define CAN_QUERY_BOOT_WORD1 0x07U
+#define CAN_QUERY_BOOT_WORD2 0x08U
+#define CAN_QUERY_BOOT_WORD3 0x09U
+#define CAN_QUERY_TIME_STATE 0x0AU
+#define CAN_QUERY_RX_AGE_US  0x0BU
+#define CAN_BOOT_STATE_NOT_READY 0U
+#define CAN_BOOT_STATE_VALID     1U
+#define CAN_BOOT_STATE_FAILED    2U
+#define CAN_QUERY_INFO_VALUE     0x000101FFUL
+/* Manual interface release 008.06; NOT an automatically generated image hash. */
+#define CAN_QUERY_BUILD_REVISION 0x00000806UL
 
 #define CAN_STOP_OPCODE    0x10U
 #define CAN_STOP_ACCEPTED  1U

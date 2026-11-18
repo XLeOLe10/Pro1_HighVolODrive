@@ -21,6 +21,11 @@ typedef struct {
 
 /* appTask only: fixed-size coherent copy, not a reliable protocol ACK queue. */
 uint32_t AxisCommandPort_GetSnapshot(AxisCommandSnapshot *snapshot);
+/* appTask only: coherent 12-byte handling history, not current permission.
+ * command_seq=0 means none. Read does not clear/acknowledge the retained record.
+ * NULL/wrong context returns AXIS_CMD_INVALID and leaves the output untouched.
+ * Future CAN must cache a result before submitting the next ordinary request. */
+uint32_t AxisCommandPort_GetReceipt(AxisCommandReceipt *receipt);
 void AxisCommandPort_Init(void);
 /* appTask only; read-only config/range check using the same immutable limits.
  * Does NOT check current fault/ready/epoch/time, publish, or renew permission.

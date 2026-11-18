@@ -35,7 +35,7 @@ uint8_t CanLinkProtocol_QueryOpcode(const CanLinkFrame *request)
         (request->length != 8U)) return 0U;
     if ((request->data[0] != 0x51U) || (request->data[1] != 0x01U) ||
         (request->data[2] < CAN_QUERY_INFO) ||
-        (request->data[2] > CAN_QUERY_BUILD)) return 0U;
+        (request->data[2] > CAN_QUERY_RX_AGE_US)) return 0U;
     for (i = 4U; i < 8U; ++i)
         if (request->data[i] != 0U) return 0U;
     return request->data[2];

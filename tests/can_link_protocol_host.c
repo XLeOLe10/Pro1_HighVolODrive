@@ -181,9 +181,13 @@ static void ValidQueries(void)
     uint8_t expected[8] = {0x52U,0x01U,0U,0U,0U,0U,0U,0U};
     CHECK(CAN_QUERY_INFO == 1U && CAN_QUERY_STATUS == 2U);
     CHECK(CAN_QUERY_FAULT == 3U && CAN_QUERY_BUILD == 4U);
-    CHECK(CAN_QUERY_INFO_VALUE == 0x0001007FU);
-    CHECK(CAN_QUERY_BUILD_REVISION == 0x00000803U);
-    for (opcode=1U; opcode<=4U; ++opcode) {
+    CHECK(CAN_QUERY_BOOT_STATE == 5U && CAN_QUERY_BOOT_WORD0 == 6U);
+    CHECK(CAN_QUERY_BOOT_WORD1 == 7U && CAN_QUERY_BOOT_WORD2 == 8U && CAN_QUERY_BOOT_WORD3 == 9U);
+    CHECK(CAN_BOOT_STATE_NOT_READY == 0U && CAN_BOOT_STATE_VALID == 1U && CAN_BOOT_STATE_FAILED == 2U);
+    CHECK(CAN_QUERY_TIME_STATE == 10U && CAN_QUERY_RX_AGE_US == 11U);
+    CHECK(CAN_QUERY_INFO_VALUE == 0x000101FFU);
+    CHECK(CAN_QUERY_BUILD_REVISION == 0x00000806U);
+    for (opcode=1U; opcode<=11U; ++opcode) {
         for (token=0U; token<256U; ++token) {
             request=Query((uint8_t)opcode,(uint8_t)token);
             memcpy(before,&request,sizeof(request));
@@ -233,7 +237,7 @@ static void InvalidQueries(void)
         if (i != 1U) {
             request=Query(1U,0U); request.data[1]=(uint8_t)i; RejectQuery(&request);
         }
-        if (i < 1U || i > 4U) {
+        if (i < 1U || i > 11U) {
             request=Query((uint8_t)i,0U); RejectQuery(&request);
         }
         if (i != 0x51U) {
@@ -258,6 +262,36 @@ static void InvalidQueries(void)
     CHECK(memcmp(before,&request,sizeof(request)) == 0);
 }
 
+
+static void InvalidBootQueries(void)
+{
+    unsigned opcode, i, byte;
+    CanLinkFrame request;
+    for (opcode=5U;opcode<=11U;++opcode) {
+        for (i=0U;i<16U;++i) {
+            request=Query((uint8_t)opcode,0xFFU);
+            switch(i) {
+            case 0: request.id=0x322U; break;
+            case 1: request.extended=2U; break;
+            case 2: request.remote=255U; break;
+            case 3: request.fd=1U; break;
+            case 4: request.brs=255U; break;
+            case 5: request.data[0]=0x52U; break;
+            case 6: request.data[1]=0U; break;
+            case 7: request.data[1]=2U; break;
+            default: request.length=(uint8_t)(i+1U); break;
+            }
+            RejectQuery(&request);
+        }
+        for (byte=4U;byte<8U;++byte) {
+            for (i=0U;i<8U;++i) {
+                request=Query((uint8_t)opcode,0U);
+                request.data[byte]=(uint8_t)(1U<<i);
+                RejectQuery(&request);
+            }
+        }
+    }
+}
 
 static CanLinkFrame Stop(uint32_t id)
 {
@@ -438,6 +472,7 @@ int main(void)
     RejectedFrames();
     ValidQueries();
     InvalidQueries();
+    InvalidBootQueries();
     StopFrames();
     TargetFrames();
     printf("CAN protocol HOST PASS: %u assertions\n", checks);

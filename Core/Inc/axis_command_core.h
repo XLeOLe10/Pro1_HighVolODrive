@@ -32,6 +32,17 @@ typedef struct {
     uint32_t max_lifetime_ms;
 } AxisCommandLimits;
 
+/* Most recently processed ordinary command, not current running permission.
+ * seq=0 means none. APPLIED records core installation, not FOC/output success.
+ * Only a newer processed pending command replaces this single slot. A future
+ * protocol must save its previous receipt before submitting another command;
+ * this is not an event queue or storage across reset. */
+typedef struct {
+    uint32_t command_seq;
+    uint32_t result;
+    uint32_t control_seq; /* Observation only; may wrap, never authorization. */
+} AxisCommandReceipt;
+
 typedef struct {
     AxisCommandLimits limits;
     uint32_t config_valid;
@@ -55,6 +66,7 @@ typedef struct {
     uint32_t stop_applied_ticket;
     uint32_t fault_latched;
     uint32_t exhausted;
+    AxisCommandReceipt receipt;
 } AxisCommandCore;
 
 /* No platform calls or internal locks. Init occurs before IRQ startup.
