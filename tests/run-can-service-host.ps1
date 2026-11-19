@@ -38,6 +38,16 @@ try {
     $canScenarios += 0..7 | ForEach-Object { 'time-geometry-' + $_ }
     $canScenarios += 0..13 | ForEach-Object { 'time-edge-' + $_ }
     $canScenarios += 0..6 | ForEach-Object { 'time-failure-' + $_ }
+    $canScenarios += @('txn-valid','txn-epoch','txn-metadata','txn-cache','txn-max-id','txn-lease','stop-txn-staging')
+    $canScenarios += 0..6 | ForEach-Object { 'txn-null-' + $_ }
+    $canScenarios += 0..5 | ForEach-Object { 'txn-order-' + $_ }
+    $canScenarios += 0..15 | ForEach-Object { 'txn-reject-' + $_ }
+    $canScenarios += 0..7 | ForEach-Object { 'txn-life-' + $_ }
+    $canScenarios += 0..1 | ForEach-Object { 'txn-tx-loss-' + $_ }
+    $canScenarios += 0..4 | ForEach-Object { 'txn-submit-' + $_ }
+    $canScenarios += 0..5 | ForEach-Object { 'txn-receipt-' + $_ }
+    $canScenarios += 0..5 | ForEach-Object { 'txn-core-' + $_ }
+    $canScenarios += 0..5 | ForEach-Object { 'txn-clear-' + $_ }
     foreach ($canScenario in $canScenarios) {
         & './build/can-host/can_link_service_host.exe' $canScenario
         if ($LASTEXITCODE -ne 0) { throw ('CAN service HOST failed: ' + $canScenario) }

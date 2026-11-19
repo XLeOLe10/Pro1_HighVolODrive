@@ -172,15 +172,73 @@ volatile AppGapTrace app_gap_trace = {
     0U, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX,
     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U
 };
+static uint32_t previous_body_end_cycles;
+static uint32_t previous_body_misses;
+static uint32_t previous_work_ready;
+
+/* TASK INTERVAL TRACE BEGIN */
 typedef struct {
     uint32_t acquisition_cycles;
+    uint32_t acquisition_end_cycles;
     uint32_t telemetry_cycles;
     uint32_t diagnostic_cycles;
 } AppWorkTiming;
 static AppWorkTiming previous_work_timing;
-static uint32_t previous_body_end_cycles;
-static uint32_t previous_body_misses;
-static uint32_t previous_work_ready;
+
+volatile AppTaskIntervalTrace app_task_interval_trace = {
+    APP_TASK_INTERVAL_WAITING, UINT32_MAX, UINT32_MAX, UINT32_MAX,
+    UINT32_MAX, UINT32_MAX
+};
+
+static void CaptureTaskInterval(uint32_t previous_ready, uint32_t previous_end,
+                                uint32_t entry)
+{
+    AD2S1210_FeedbackSnapshot next;
+    uint32_t state = APP_TASK_INTERVAL_UNAVAILABLE;
+    uint32_t span = ad2s_age_trace.edge_interval_cycles;
+    uint32_t source_edge;
+    uint32_t end_offset;
+    uint32_t entry_offset;
+    uint32_t acquisition_offset;
+
+    /* The single scheduled publisher has just returned. A calibrated previous
+     * step supplies its end marker, including a legitimate timer value of 0. */
+    if ((previous_ready == 0U) ||
+        ((ad2s_age_trace.state != AD2S_AGE_EDGE_BY_CHECK) &&
+         (ad2s_age_trace.state != AD2S_AGE_EDGE_AFTER_CHECK)) ||
+        (span == 0U) || (span >= 0x80000000UL))
+        goto publish;
+
+    AD2S1210_GetSnapshot(&next);
+    if ((next.valid == 0U) || (next.sequence != ad2s_age_trace.next_sequence) ||
+        (next.sequence != (uint32_t)(ad2s_age_trace.source_sequence + 1U)))
+        goto publish;
+
+    source_edge = (uint32_t)(next.sample_cycles - span);
+    end_offset = (uint32_t)(previous_end - source_edge);
+    entry_offset = (uint32_t)(entry - source_edge);
+    if ((end_offset > entry_offset) || (entry_offset > span))
+        goto publish;
+
+    app_task_interval_trace.old_edge_to_end_cycles = end_offset;
+    app_task_interval_trace.between_steps_cycles = entry_offset - end_offset;
+    app_task_interval_trace.entry_to_edge_cycles = span - entry_offset;
+
+    /* Both details belong to the source step. The driver marker follows
+     * publication; the telemetry measurement only covers the later queue attempt. */
+    acquisition_offset = (uint32_t)(previous_work_timing.acquisition_end_cycles - source_edge);
+    if ((acquisition_offset <= end_offset) &&
+        (previous_work_timing.telemetry_cycles <= end_offset - acquisition_offset))
+    {
+        app_task_interval_trace.old_edge_to_acquisition_end_cycles = acquisition_offset;
+        app_task_interval_trace.old_telemetry_queue_cycles = previous_work_timing.telemetry_cycles;
+    }
+    state = APP_TASK_INTERVAL_COMPLETE;
+publish:
+    __DMB();
+    app_task_interval_trace.state = state;
+}
+/* TASK INTERVAL TRACE END */
 
 static void CaptureSampleGap(uint32_t entry_cycles, uint32_t gap_before)
 {
@@ -233,6 +291,53 @@ static void RecordCriticalCycles(uint32_t started)
 }
 
 #if AXIS_COMMAND_BENCH_ENABLE
+volatile AppReadyLossTrace app_ready_loss_trace;
+static volatile uint32_t app_task_phase;
+/* FastISR body-start history, not hardware IRQ-entry or total IRQ duration. */
+static uint32_t previous_fast_body_entry;
+static uint32_t previous_fast_body_valid;
+
+/* READY LOSS TRACE BEGIN: tested from this production block on the host. */
+static void CaptureReadyLoss(uint32_t previous_permit, uint32_t epoch_before,
+                             uint32_t ready, uint32_t now_cycles, uint32_t now_ms,
+                             const AD2S1210_FeedbackSnapshot *snapshot,
+                             uint32_t current_ready, uint32_t lockout, uint32_t fault)
+{
+    uint32_t reasons = 0U;
+    uint32_t age_cycles;
+    uint32_t age_ms;
+    if ((app_ready_loss_trace.captured != 0U) || (previous_permit == 0U) ||
+        (ready != 0U) || (axis_command_result != AXIS_CMD_NOT_READY) ||
+        (axis_command_epoch == epoch_before)) return;
+    age_cycles = (uint32_t)(now_cycles - snapshot->sample_cycles);
+    age_ms = (uint32_t)(now_ms - snapshot->sample_tick_ms);
+    if (snapshot->valid == 0U) reasons |= APP_READY_LOSS_POSITION;
+    if (snapshot->speed_valid == 0U) reasons |= APP_READY_LOSS_SPEED;
+    if (age_cycles > feedback_age_limit_cycles) reasons |= APP_READY_LOSS_DWT_AGE;
+    if (age_ms > APP_FEEDBACK_MAX_AGE_MS) reasons |= APP_READY_LOSS_HAL_AGE;
+    if (current_ready == 0U) reasons |= APP_READY_LOSS_CURRENT;
+    if (lockout != 0U) reasons |= APP_READY_LOSS_LOCKOUT;
+    if (fault != 0U) reasons |= APP_READY_LOSS_FAULT;
+    app_ready_loss_trace.reason_bits = reasons;
+    app_ready_loss_trace.age_cycles = age_cycles;
+    app_ready_loss_trace.age_ms = age_ms;
+    app_ready_loss_trace.sample_seq = snapshot->sequence;
+    app_ready_loss_trace.command_seq = axis_command_result_seq;
+    app_ready_loss_trace.epoch_before = epoch_before;
+    app_ready_loss_trace.epoch_after = axis_command_epoch;
+    app_ready_loss_trace.task_phase = app_task_phase;
+    app_ready_loss_trace.gap_count = ad2s_sample_gap_count;
+    app_ready_loss_trace.spi_errors = ad2s_spi_error_count;
+    app_ready_loss_trace.deadline_misses = app_task_deadline_misses;
+    /* Pair the next resolver publication with the snapshot and clock value
+     * used by this TIM1 check. appTask can resume after this IRQ returns. */
+    if ((reasons & APP_READY_LOSS_DWT_AGE) != 0U)
+        AD2S1210_ArmAgeTrace(snapshot, now_cycles);
+    __DMB();
+    app_ready_loss_trace.captured = 1U;
+}
+/* READY LOSS TRACE END */
+
 /* appTask reads diagnostic mirrors on STATUS/FAULT and STOP result rereads.
  * PRIMASK excludes TIM1 IRQ0 while copying. Mirrors can reflect different
  * publication times (e.g. fault before next permit update); never authorize
@@ -251,6 +356,7 @@ static void ReadCanStatus(CanLinkReadStatus *snapshot)
     /* PublishDiagnostics writes this only after the core consumes STOP and
      * BeginCycle has disabled outputs; a stale read delays, never fakes, ACK. */
     snapshot->stop_applied_ticket = axis_command_stop_applied;
+    snapshot->run_epoch = axis_command_epoch;
     __DMB();
     RecordCriticalCycles(started);
     __set_PRIMASK(saved);
@@ -274,6 +380,40 @@ static uint8_t CheckCanTargets(int32_t speed_rpm, uint32_t iq_limit_ma)
     if (result == AXIS_CMD_CONFIG_UNSET) return CAN_TARGET_CHECK_CONFIG;
     return CAN_TARGET_CHECK_REJECTED;
 }
+
+/* CAN owns the immutable complete request; the port binds original SOF time
+ * and core sequence atomically. Bench commands never reach the FOC controller. */
+static uint32_t SubmitCanCommand(const CanLinkCommandRequest *request, uint32_t *seq)
+{
+    AxisCommandFrame frame = {0};
+    if (seq != NULL) *seq = 0U;
+    if ((request == NULL) || (seq == NULL) || (request->ttl_ms == 0U) ||
+        (request->ttl_ms > 1000U))
+        return AXIS_CMD_INVALID;
+    frame.run_epoch = request->run_epoch;
+    frame.opcode = request->opcode;
+    frame.control_mode = AXIS_CMD_SPEED_MODE;
+    frame.speed_target_rpm = (float)request->speed_rpm;
+    frame.iq_limit_a = (float)request->iq_limit_ma / 1000.0f;
+    return AxisCommandPort_SubmitTimed(&frame, request->begin_timestamp,
+                                      request->ttl_ms * 1000U / CAN_TIME_TICK_US, seq);
+}
+
+static uint32_t ReadCanReceipt(CanLinkCommandReceipt *receipt)
+{
+    AxisCommandReceipt local;
+    if ((receipt == NULL) || (AxisCommandPort_GetReceipt(&local) != AXIS_CMD_OK))
+        return 0U;
+    receipt->command_seq = local.command_seq;
+    receipt->result = local.result;
+    receipt->control_seq = local.control_seq;
+    return 1U;
+}
+
+static const CanLinkProviders can_providers = {
+    ReadCanStatus, RequestCanStop, CheckCanTargets, AppRuntime_GetBootIdentity,
+    SubmitCanCommand, ReadCanReceipt
+};
 #endif
 
 #if (BOARD_POWER_STAGE_MODE != BOARD_POWER_STAGE_DISABLED)
@@ -323,6 +463,81 @@ static void PreparePowerPWM(void)
 }
 #endif
 
+#if AXIS_COMMAND_BENCH_ENABLE
+/* BENCH TELEMETRY BEGIN */
+/* Single Cortex-M core: appTask is the sole producer and runs above Idle.
+ * Keep the slot occupied even while Idle is preempted in the formatter/HAL. */
+enum { TELEMETRY_SLOT_FREE, TELEMETRY_SLOT_QUEUED, TELEMETRY_SLOT_EXPIRED };
+static volatile uint32_t telemetry_pending;
+static volatile uint32_t telemetry_pending_tick;
+static volatile float telemetry_pending_reference;
+static volatile float telemetry_pending_feedback;
+
+static void QueueTelemetry(uint32_t now)
+{
+    uint32_t saved;
+    uint32_t started;
+    if (telemetry_pending != TELEMETRY_SLOT_FREE)
+    {
+        /* The next due tick ends the old slot's usefulness. Remember this
+         * even if Idle starvation spans a complete HAL tick wrap. */
+        telemetry_pending = TELEMETRY_SLOT_EXPIRED;
+        current_telemetry_drop_count++;
+        return;
+    }
+    if (huart1.gState != HAL_UART_STATE_READY)
+    {
+        current_telemetry_drop_count++;
+        return;
+    }
+    saved = __get_PRIMASK();
+    __disable_irq();
+    started = DWT->CYCCNT;
+    telemetry_pending_reference = telemetry_ref_rpm;
+    telemetry_pending_feedback = telemetry_feedback_rpm;
+    telemetry_pending_tick = now;
+    __DMB();
+    telemetry_pending = TELEMETRY_SLOT_QUEUED;
+    RecordCriticalCycles(started);
+    __set_PRIMASK(saved);
+}
+
+/* Idle is the only UART submitter. The transmit IRQ owns telemetry_buffer
+ * until gState returns to READY, independently of the pending sample slot. */
+void AppRuntime_ServiceIdleTelemetry(void)
+{
+    size_t length = 0U;
+    if (telemetry_pending == TELEMETRY_SLOT_FREE) return;
+    __DMB();
+    if ((telemetry_pending == TELEMETRY_SLOT_QUEUED) &&
+        (huart1.gState == HAL_UART_STATE_READY))
+    {
+        length = TelemetryFormat_SpeedCsv((char *)telemetry_buffer,
+                     sizeof(telemetry_buffer), telemetry_pending_reference,
+                     telemetry_pending_feedback);
+    }
+    /* Recheck after formatting: Idle can be preempted for arbitrary time.
+     * This is a submission-time check; the UART start remains preemptible. */
+    if ((length != 0U) &&
+        ((uint32_t)(HAL_GetTick() - telemetry_pending_tick) < APP_TELEMETRY_PERIOD_MS) &&
+        (telemetry_pending == TELEMETRY_SLOT_QUEUED) &&
+        (HAL_UART_Transmit_IT(&huart1, telemetry_buffer, (uint16_t)length) == HAL_OK))
+    {
+        current_telemetry_tx_count++;
+    }
+    else
+    {
+        /* appTask can increment this same counter for a later due sample. */
+        uint32_t saved = __get_PRIMASK();
+        __disable_irq();
+        current_telemetry_drop_count++;
+        __set_PRIMASK(saved);
+    }
+    __DMB();
+    telemetry_pending = TELEMETRY_SLOT_FREE;
+}
+/* BENCH TELEMETRY END */
+#else
 static void SendTelemetry(void)
 {
     size_t length;
@@ -364,6 +579,8 @@ static void SendTelemetry(void)
     }
 }
 
+#endif
+
 void AppRuntime_Init(void)
 {
     /* MX_TIM1_Init configured AF pins; restore GPIO-low until calibration. */
@@ -399,9 +616,8 @@ void AppRuntime_TaskStart(void)
     app_heap_free_bytes = (uint32_t)xPortGetFreeHeapSize();
     app_heap_min_free_bytes = (uint32_t)xPortGetMinimumEverFreeHeapSize();
 #if AXIS_COMMAND_BENCH_ENABLE
-    CanLink_Init(ReadCanStatus, RequestCanStop, CheckCanTargets,
-                 AppRuntime_GetBootIdentity);
-    /* STOP is still the sole Bench command; precheck/identity never publish. */
+    CanLink_Init(&can_providers);
+    /* CAN alone submits Bench commands; precheck/identity never publish. */
 #endif
     CurrentSense_Start();
 #if AXIS_COMMAND_BENCH_ENABLE
@@ -435,12 +651,24 @@ void AppRuntime_BackgroundStep(void)
     AppWorkTiming work_timing;
     work_timing.telemetry_cycles = 0U;
     work_timing.diagnostic_cycles = 0U;
+    app_task_phase = 1U;
 #endif
     AD2S1210_Run_1kHz();
 #if AXIS_COMMAND_BENCH_ENABLE
-    work_timing.acquisition_cycles = (uint32_t)(DWT->CYCCNT - entry_cycles);
+    work_timing.acquisition_end_cycles = DWT->CYCCNT;
+    work_timing.acquisition_cycles = (uint32_t)(work_timing.acquisition_end_cycles - entry_cycles);
+    /* TASK INTERVAL CHECK BEGIN */
+    if ((ad2s_age_trace.state >= AD2S_AGE_EDGE_BY_CHECK) &&
+        (app_task_interval_trace.state == APP_TASK_INTERVAL_WAITING))
+        CaptureTaskInterval(previous_work_ready, previous_body_end_cycles, entry_cycles);
+    /* TASK INTERVAL CHECK END */
     CaptureSampleGap(entry_cycles, gap_before);
+    /* Task-side sticky expiry observation prevents a stopped TIM1 consumer
+     * from seeing a wrapped raw timestamp as a new lease. No output writes. */
+    app_task_phase = 2U;
+    AxisCommandPort_ObserveTime();
     CanLink_Poll(); /* bounded link service, after resolver sampling */
+    app_task_phase = 0U;
 #endif
 #if (BOARD_POWER_STAGE_MODE != BOARD_POWER_STAGE_DISABLED)
     if ((power_pwm_prepared == 0U) && (CurrentMonitor_IsReady() != 0U) &&
@@ -456,17 +684,20 @@ void AppRuntime_BackgroundStep(void)
     {
         last_telemetry_tick = now;
 #if AXIS_COMMAND_BENCH_ENABLE
+        app_task_phase = 3U;
         section_started = DWT->CYCCNT;
-#endif
-        SendTelemetry();
-#if AXIS_COMMAND_BENCH_ENABLE
+        QueueTelemetry(now);
         work_timing.telemetry_cycles = (uint32_t)(DWT->CYCCNT - section_started);
+        app_task_phase = 0U;
+#else
+        SendTelemetry();
 #endif
     }
     if ((uint32_t)(now - last_diagnostic_tick) >= APP_DIAGNOSTIC_PERIOD_MS)
     {
         last_diagnostic_tick = now;
 #if AXIS_COMMAND_BENCH_ENABLE
+        app_task_phase = 4U;
         section_started = DWT->CYCCNT;
 #endif
         /* Full stack scanning belongs to the preemptible idle hook. */
@@ -474,6 +705,7 @@ void AppRuntime_BackgroundStep(void)
         app_heap_min_free_bytes = (uint32_t)xPortGetMinimumEverFreeHeapSize();
 #if AXIS_COMMAND_BENCH_ENABLE
         work_timing.diagnostic_cycles = (uint32_t)(DWT->CYCCNT - section_started);
+        app_task_phase = 0U;
 #endif
     }
     app_task_iterations++;
@@ -502,6 +734,18 @@ void AppRuntime_FastISR(void)
     uint8_t feedback_ok;
     uint8_t sample_ok;
     uint8_t allow;
+#if AXIS_COMMAND_BENCH_ENABLE
+    uint32_t previous_permit;
+    uint32_t epoch_before;
+    uint32_t ready_current;
+    uint32_t ready_lockout;
+    uint32_t ready_fault;
+    uint16_t raw_u;
+    uint16_t raw_v;
+    uint16_t raw_w;
+    uint16_t raw_bus;
+    uint8_t raw_valid;
+#endif
 
     if (runtime_started == 0U)
     {
@@ -517,6 +761,16 @@ void AppRuntime_FastISR(void)
         foc_run_request = 0U;
         BoardSafety_DisableOutputs();
     }
+#if AXIS_COMMAND_BENCH_ENABLE
+    /* ADC EARLY READ BEGIN: tested from this production block on the host. */
+    /* Only this ISR iteration owns these codes. A miss is never retried later. */
+    raw_valid = CurrentSense_HasNewSample();
+    if (raw_valid != 0U)
+    {
+        CurrentSense_GetRaw(&raw_u, &raw_v, &raw_w, &raw_bus);
+    }
+    /* ADC EARLY READ END */
+#endif
     AD2S1210_GetSnapshot(&snapshot);
     now_ms = HAL_GetTick();
     now_cycles = DWT->CYCCNT;
@@ -539,9 +793,13 @@ void AppRuntime_FastISR(void)
 #if AXIS_COMMAND_BENCH_ENABLE
     /* Software command readiness is separate from output permission. Power
      * remains compiled out; no test frame is installed in the FOC controller. */
+    previous_permit = axis_command_permit;
+    epoch_before = axis_command_epoch;
+    ready_current = CurrentMonitor_IsReady();
+    ready_lockout = resolver_dynamic_test_lockout_active;
+    ready_fault = board_fault_mask;
     command_bench_ready = (uint32_t)APP_CAN_ENABLE(1U, 1U,
-        CurrentMonitor_IsReady(), feedback_ok, board_fault_mask,
-        resolver_dynamic_test_lockout_active);
+        ready_current, feedback_ok, ready_fault, ready_lockout);
     command_frame = AxisCommandPort_BeginCycle(now_ms, command_bench_ready);
     command_permit = (uint8_t)(command_frame != NULL);
     OpenFOC_ApplyCommand(NULL);
@@ -564,9 +822,17 @@ void AppRuntime_FastISR(void)
         }
     }
 
+    /* ADC RAW PROCESS BEGIN: tested from this production block on the host. */
     before = monitor_sample_sequence;
+#if AXIS_COMMAND_BENCH_ENABLE
+    /* Keep calibration and Park here, with the angle updated above. */
+    if (raw_valid != 0U)
+        CurrentMonitor_ProcessRaw_20kHz(foc_theta, raw_u, raw_v, raw_w, raw_bus);
+#else
     CurrentMonitor_Run_20kHz(foc_theta);
+#endif
     sample_ok = (uint8_t)(monitor_sample_sequence != before);
+    /* ADC RAW PROCESS END */
     if (sample_ok == 0U)
     {
         app_adc_missed_count++;
@@ -578,10 +844,22 @@ void AppRuntime_FastISR(void)
         if (sample_ok == 0U) reason |= BOARD_FAULT_ADC_FRAME;
         if (reason != 0U)
         {
+#if AXIS_COMMAND_BENCH_ENABLE
+            uint32_t capture_adc_fault = (uint32_t)((board_fault_mask == 0U) &&
+                (command_permit != 0U) && (sample_ok == 0U));
+#endif
             BoardSafety_LatchFault(reason);
             AxisCommandPort_RejectActive(AXIS_CMD_FAULT);
             command_permit = 0U;
             OpenFOC_ApplyCommand(NULL);
+#if AXIS_COMMAND_BENCH_ENABLE
+            /* Freeze the driver's actual failed check only AFTER normal
+             * fault/disarm. No live ADC flags are reread here. */
+            if (capture_adc_fault != 0U)
+                CurrentSense_CaptureFault(started, previous_fast_body_entry,
+                    foc_isr_last_cycles, previous_fast_body_valid,
+                    axis_command_applied_seq);
+#endif
         }
     }
 
@@ -630,7 +908,19 @@ void AppRuntime_FastISR(void)
     /* Any final expiry/fault already removed hardware permission. Reset PI
      * outside PRIMASK; TIM1 still owns these private control variables. */
     if (command_permit == 0U) OpenFOC_ApplyCommand(NULL);
+#if AXIS_COMMAND_BENCH_ENABLE
+    /* Cold diagnostic only, after FinalPermit published the revoke and output
+     * handling completed. Its bounded copy cost is included in this ISR time. */
+    if ((previous_permit != 0U) && (command_bench_ready == 0U))
+        CaptureReadyLoss(previous_permit, epoch_before, command_bench_ready,
+                         now_cycles, now_ms, &snapshot,
+                         ready_current, ready_lockout, ready_fault);
+#endif
 
+#if AXIS_COMMAND_BENCH_ENABLE
+    previous_fast_body_entry = started;
+    previous_fast_body_valid = 1U;
+#endif
     elapsed = (uint32_t)(DWT->CYCCNT - started);
     foc_isr_last_cycles = elapsed;
     if (elapsed > foc_isr_max_cycles) foc_isr_max_cycles = elapsed;

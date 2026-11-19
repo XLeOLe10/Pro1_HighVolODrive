@@ -59,7 +59,9 @@ const osThreadAttr_t appTask_attributes = {
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
-
+#if AXIS_COMMAND_BENCH_ENABLE
+static void AppTaskWaitNext(uint32_t *deadline, uint32_t *catchup_used);
+#endif
 /* USER CODE END FunctionPrototypes */
 
 void StartAppTask(void *argument);
@@ -85,6 +87,7 @@ void vApplicationIdleHook(void)
     return;
   }
 #if AXIS_COMMAND_BENCH_ENABLE
+  AppRuntime_ServiceIdleTelemetry();
   if (app_stack_probe_enabled == 0U)
   {
     return;
@@ -189,9 +192,15 @@ void StartAppTask(void *argument)
 {
   /* USER CODE BEGIN StartAppTask */
   uint32_t deadline;
+#if AXIS_COMMAND_BENCH_ENABLE
+  uint32_t catchup_used = 0U;
+#else
   uint32_t now;
+#endif
   uint32_t started;
+#if !AXIS_COMMAND_BENCH_ENABLE
   osStatus_t status;
+#endif
   (void)argument;
   AppRuntime_TaskStart();
   deadline = osKernelGetTickCount() + APP_PERIOD_TICKS;
@@ -204,6 +213,9 @@ void StartAppTask(void *argument)
     {
       app_task_max_cycles = app_task_last_cycles;
     }
+#if AXIS_COMMAND_BENCH_ENABLE
+    AppTaskWaitNext(&deadline, &catchup_used);
+#else
     now = osKernelGetTickCount();
     if (APP_TIME_REACHED(now, deadline))
     {
@@ -226,12 +238,67 @@ void StartAppTask(void *argument)
       BoardSafety_Fatal(BOARD_FAULT_SCHEDULER);
     }
     deadline += APP_PERIOD_TICKS;
+#endif
   }
   /* USER CODE END StartAppTask */
 }
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
+#if AXIS_COMMAND_BENCH_ENABLE
+/* APP TASK WAIT BEGIN: tested from this production block on the host. */
+static void AppTaskWaitNext(uint32_t *deadline, uint32_t *catchup_used)
+{
+  uint32_t now = osKernelGetTickCount();
+  uint32_t late = APP_TIME_REACHED(now, *deadline);
+  osStatus_t status;
 
+  if (late != 0U)
+  {
+    app_task_deadline_misses++;
+  }
+  if (*catchup_used != 0U)
+  {
+    /* A positive relative delay enters the kernel's delayed list. CMSIS
+     * osDelayUntil can return osOK without blocking after an internal tick
+     * race, so it cannot restore the one-shot catch-up allowance here. */
+    if (osDelay(APP_PERIOD_TICKS) != osOK)
+    {
+      BoardSafety_Fatal(BOARD_FAULT_SCHEDULER);
+      return;
+    }
+    *deadline = osKernelGetTickCount() + APP_PERIOD_TICKS;
+    *catchup_used = 0U;
+    return;
+  }
+  if (late != 0U)
+  {
+    /* Run one fresh background iteration, not a replay of missed samples.
+     * The next wait must block even if that iteration finishes early. */
+    *deadline = now + APP_PERIOD_TICKS;
+    *catchup_used = 1U;
+    return;
+  }
+
+  status = osDelayUntil(*deadline);
+  if (status == osErrorParameter)
+  {
+    /* The deadline expired after the check: consume the same allowance. */
+    app_task_deadline_misses++;
+    *deadline = osKernelGetTickCount() + APP_PERIOD_TICKS;
+    *catchup_used = 1U;
+    return;
+  }
+  if (status != osOK)
+  {
+    BoardSafety_Fatal(BOARD_FAULT_SCHEDULER);
+    return;
+  }
+  /* No allowance was consumed on this ordinary path. An osOK result alone
+   * does not prove it blocked, so do not use it to restore an allowance. */
+  *deadline += APP_PERIOD_TICKS;
+}
+/* APP TASK WAIT END */
+#endif
 /* USER CODE END Application */
 

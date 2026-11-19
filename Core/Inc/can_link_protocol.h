@@ -18,12 +18,13 @@
 #define CAN_QUERY_BOOT_WORD3 0x09U
 #define CAN_QUERY_TIME_STATE 0x0AU
 #define CAN_QUERY_RX_AGE_US  0x0BU
+#define CAN_QUERY_EPOCH      0x0CU
 #define CAN_BOOT_STATE_NOT_READY 0U
 #define CAN_BOOT_STATE_VALID     1U
 #define CAN_BOOT_STATE_FAILED    2U
-#define CAN_QUERY_INFO_VALUE     0x000101FFUL
-/* Manual interface release 008.06; NOT an automatically generated image hash. */
-#define CAN_QUERY_BUILD_REVISION 0x00000806UL
+#define CAN_QUERY_INFO_VALUE     0x000103FFUL
+/* Manual interface release 008.17; NOT an automatically generated image hash. */
+#define CAN_QUERY_BUILD_REVISION 0x00000817UL
 
 #define CAN_STOP_OPCODE    0x10U
 #define CAN_STOP_ACCEPTED  1U
@@ -37,6 +38,44 @@
 #define CAN_TARGET_CHECK_RANGE    2U
 #define CAN_TARGET_CHECK_CONFIG   3U
 #define CAN_TARGET_CHECK_REJECTED 4U
+
+#define CAN_TXN_PAGE_BEGIN   0x30U
+#define CAN_TXN_PAGE_BOOT0   0x31U
+#define CAN_TXN_PAGE_BOOT1   0x32U
+#define CAN_TXN_PAGE_BOOT2   0x33U
+#define CAN_TXN_PAGE_BOOT3   0x34U
+#define CAN_TXN_PAGE_EPOCH   0x35U
+#define CAN_TXN_PAGE_TARGETS 0x36U
+#define CAN_TXN_PAGE_META    0x37U
+#define CAN_TXN_PAGE_COMMIT  0x38U
+#define CAN_TXN_PAGE_RESULT  0x39U
+#define CAN_TXN_STAGING      1U
+#define CAN_TXN_ACCEPTED     2U
+#define CAN_TXN_CORE_RESULT  3U
+#define CAN_TXN_REJECTED     4U
+#define CAN_TXN_BUSY         5U
+#define CAN_TXN_STALE        6U
+#define CAN_TXN_UNKNOWN      7U
+#define CAN_TXN_ERR_ORDER    1U
+#define CAN_TXN_ERR_CONFLICT 2U
+#define CAN_TXN_ERR_BOOT     3U
+#define CAN_TXN_ERR_EPOCH    4U
+#define CAN_TXN_ERR_CRC      5U
+#define CAN_TXN_ERR_TTL      6U
+#define CAN_TXN_ERR_TIME     7U
+#define CAN_TXN_ERR_STOP     8U
+#define CAN_TXN_ERR_FAULT    9U
+#define CAN_TXN_ERR_INTERNAL 10U
+#define CAN_TXN_ERR_OPCODE   11U
+#define CAN_TXN_CORE_RESULT_MAX 16U
+#define CAN_TXN_MAX_TTL_MS   1000U
+#define CAN_TXN_MAX_TICKS    31250U
+
+typedef struct {
+    uint8_t page;
+    uint8_t token;
+    uint32_t value;
+} CanLinkTransactionFrame;
 
 typedef struct {
     int32_t speed_rpm;
@@ -84,5 +123,19 @@ int CanLinkProtocol_ReadTargetCheck(const CanLinkFrame *request, CanLinkTargetPa
  * Result is CAN_TARGET_CHECK_*. Invalid leaves reply intact; alias allowed. */
 int CanLinkProtocol_MakeTargetCheckReply(const CanLinkFrame *request,
                                         uint8_t result, CanLinkFrame *reply);
+
+/* V2: 43 02 page token value32LE. Pages30..37 form eight ordered words;
+ * 38 commits CRC32 over those 32 wire-order bytes, 39 reads an explicit ID.
+ * Token is only an assembly label, never identity/authorization. */
+int CanLinkProtocol_ReadTransaction(const CanLinkFrame *request,
+                                    CanLinkTransactionFrame *decoded);
+/* IEEE reflected CRC32, init/final XOR FFFFFFFF, polynomial EDB88320.
+ * Words are serialized little-endian; CRC is error detection, not security. */
+uint32_t CanLinkProtocol_TransactionCrc32(const uint32_t words[8]);
+/* 41 02 phase detail request_id32LE. Phase1 detail=next page; phase3 detail
+ * is a core result (0E records installation), phase4 detail=CAN_TXN_ERR_*.
+ * Invalid arguments leave reply untouched. ID0 is allowed only for UNKNOWN. */
+int CanLinkProtocol_MakeTransactionReply(uint32_t request_id, uint8_t phase,
+                                        uint8_t detail, CanLinkFrame *reply);
 
 #endif

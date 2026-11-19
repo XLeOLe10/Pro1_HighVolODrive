@@ -185,9 +185,10 @@ static void ValidQueries(void)
     CHECK(CAN_QUERY_BOOT_WORD1 == 7U && CAN_QUERY_BOOT_WORD2 == 8U && CAN_QUERY_BOOT_WORD3 == 9U);
     CHECK(CAN_BOOT_STATE_NOT_READY == 0U && CAN_BOOT_STATE_VALID == 1U && CAN_BOOT_STATE_FAILED == 2U);
     CHECK(CAN_QUERY_TIME_STATE == 10U && CAN_QUERY_RX_AGE_US == 11U);
-    CHECK(CAN_QUERY_INFO_VALUE == 0x000101FFU);
-    CHECK(CAN_QUERY_BUILD_REVISION == 0x00000806U);
-    for (opcode=1U; opcode<=11U; ++opcode) {
+    CHECK(CAN_QUERY_EPOCH == 12U);
+    CHECK(CAN_QUERY_INFO_VALUE == 0x000103FFU);
+    CHECK(CAN_QUERY_BUILD_REVISION == 0x00000817U);
+    for (opcode=1U; opcode<=12U; ++opcode) {
         for (token=0U; token<256U; ++token) {
             request=Query((uint8_t)opcode,(uint8_t)token);
             memcpy(before,&request,sizeof(request));
@@ -237,7 +238,7 @@ static void InvalidQueries(void)
         if (i != 1U) {
             request=Query(1U,0U); request.data[1]=(uint8_t)i; RejectQuery(&request);
         }
-        if (i < 1U || i > 11U) {
+        if (i < 1U || i > 12U) {
             request=Query((uint8_t)i,0U); RejectQuery(&request);
         }
         if (i != 0x51U) {
@@ -267,7 +268,7 @@ static void InvalidBootQueries(void)
 {
     unsigned opcode, i, byte;
     CanLinkFrame request;
-    for (opcode=5U;opcode<=11U;++opcode) {
+    for (opcode=5U;opcode<=12U;++opcode) {
         for (i=0U;i<16U;++i) {
             request=Query((uint8_t)opcode,0xFFU);
             switch(i) {
@@ -466,6 +467,107 @@ static void TargetFrames(void)
     request=Stop(1U);RejectTarget(&request);
 }
 
+static CanLinkFrame TransactionFrame(uint8_t page,uint8_t token,uint32_t value)
+{
+    CanLinkFrame f=Ping();unsigned i;
+    f.data[0]=0x43U;f.data[1]=2U;f.data[2]=page;f.data[3]=token;
+    for(i=0U;i<4U;++i)f.data[4U+i]=(uint8_t)(value>>(8U*i));
+    return f;
+}
+static void RejectTransaction(const CanLinkFrame *request)
+{
+    CanLinkTransactionFrame decoded;unsigned char before[sizeof(decoded)];
+    memset(&decoded,0xA5,sizeof(decoded));memcpy(before,&decoded,sizeof(decoded));
+    CHECK(CanLinkProtocol_ReadTransaction(request,&decoded)==0);
+    CHECK(memcmp(before,&decoded,sizeof(decoded))==0);
+}
+static void TransactionFrames(void)
+{
+    static const uint32_t values[]={0U,1U,0x80000000U,0x89ABCDEFU,UINT32_MAX};
+    static const uint32_t words[4][8]={
+        {1U,1U,2U,3U,4U,1U,0x01F40064U,0x03E80001U},
+        {0U,0U,0U,0U,0U,0U,0U,0U},
+        {UINT32_MAX,UINT32_MAX,UINT32_MAX,UINT32_MAX,UINT32_MAX,UINT32_MAX,UINT32_MAX,UINT32_MAX},
+        {0U,1U,2U,3U,4U,5U,6U,7U}};
+    /* Independently calculated with Python zlib over struct.pack('<8I',...). */
+    static const uint32_t crc[]={0x80B3BFF2U,0x190A55ADU,0xFF6CAB0BU,0x790723DCU};
+    CanLinkFrame frame,reply;CanLinkTransactionFrame decoded;
+    unsigned char before[sizeof(frame)];uint32_t mutated[8];
+    unsigned page,token,i,field,phase,detail,valid;
+    CHECK(CAN_TXN_PAGE_BEGIN==0x30U && CAN_TXN_PAGE_BOOT0==0x31U && CAN_TXN_PAGE_BOOT3==0x34U);
+    CHECK(CAN_TXN_PAGE_EPOCH==0x35U && CAN_TXN_PAGE_TARGETS==0x36U && CAN_TXN_PAGE_META==0x37U);
+    CHECK(CAN_TXN_PAGE_COMMIT==0x38U && CAN_TXN_PAGE_RESULT==0x39U);
+    CHECK(CAN_TXN_STAGING==1U && CAN_TXN_ACCEPTED==2U && CAN_TXN_CORE_RESULT==3U);
+    CHECK(CAN_TXN_REJECTED==4U && CAN_TXN_BUSY==5U && CAN_TXN_STALE==6U && CAN_TXN_UNKNOWN==7U);
+    CHECK(CAN_TXN_MAX_TTL_MS==1000U && CAN_TXN_MAX_TICKS==31250U && CAN_TXN_CORE_RESULT_MAX==16U);
+    for(page=0x30U;page<=0x39U;++page) {
+        for(token=0U;token<256U;++token) {
+            frame=TransactionFrame((uint8_t)page,(uint8_t)token,0x89ABCDEFU);
+            memcpy(before,&frame,sizeof(frame));
+            CHECK(CanLinkProtocol_ReadTransaction(&frame,&decoded)==1);
+            CHECK(decoded.page==page && decoded.token==token && decoded.value==0x89ABCDEFU);
+            CHECK(memcmp(before,&frame,sizeof(frame))==0);
+            CHECK(CanLinkProtocol_QueryOpcode(&frame)==0U && CanLinkProtocol_StopRequestId(&frame)==0U);
+            ExpectRejected(&frame);RejectTarget(&frame);
+        }
+        for(i=0U;i<sizeof(values)/sizeof(values[0]);++i) {
+            frame=TransactionFrame((uint8_t)page,0U,values[i]);
+            if(page==0x30U && values[i]==0U)RejectTransaction(&frame);
+            else {
+                CHECK(CanLinkProtocol_ReadTransaction(&frame,&decoded)==1);
+                CHECK(decoded.value==values[i]);
+            }
+        }
+    }
+    for(i=0U;i<256U;++i) {
+        frame=TransactionFrame(0x30U,0U,1U);
+        if(i!=8U) { frame.length=(uint8_t)i;RejectTransaction(&frame); }
+        for(field=0U;field<3U;++field) {
+            unsigned expected=field==0U?0x43U:field==1U?2U:0x30U;
+            if((field==2U && i>=0x30U && i<=0x39U) || i==expected)continue;
+            frame=TransactionFrame(0x30U,0U,1U);frame.data[field]=(uint8_t)i;RejectTransaction(&frame);
+        }
+        if(i) {
+            frame=TransactionFrame(0x31U,0U,0U);frame.extended=(uint8_t)i;RejectTransaction(&frame);
+            frame=TransactionFrame(0x31U,0U,0U);frame.remote=(uint8_t)i;RejectTransaction(&frame);
+            frame=TransactionFrame(0x31U,0U,0U);frame.fd=(uint8_t)i;RejectTransaction(&frame);
+            frame=TransactionFrame(0x31U,0U,0U);frame.brs=(uint8_t)i;RejectTransaction(&frame);
+        }
+    }
+    for(i=0U;i<0x800U;++i)if(i!=0x321U) {
+        frame=TransactionFrame(0x39U,0U,0U);frame.id=i;RejectTransaction(&frame);
+    }
+    frame=TransactionFrame(0x30U,0U,1U);frame.id=UINT32_MAX;RejectTransaction(&frame);
+    frame=TransactionFrame(0x39U,0U,0U);CHECK(CanLinkProtocol_ReadTransaction(&frame,NULL)==0);
+    RejectTransaction(NULL);frame=Ping();RejectTransaction(&frame);
+    frame=Query(12U,0U);RejectTransaction(&frame);frame=Stop(1U);RejectTransaction(&frame);
+    frame=Target(0U,1U,2U);RejectTransaction(&frame);
+    for(phase=0U;phase<=8U;++phase)for(detail=0U;detail<256U;++detail) {
+        valid=(phase==1U && detail>=0x31U && detail<=0x38U) ||
+              (phase==3U && detail>=1U && detail<=16U) ||
+              (phase==4U && detail>=1U && detail<=11U) ||
+              ((phase==2U || (phase>=5U && phase<=7U)) && detail==0U);
+        memset(&reply,0xA5,sizeof(reply));memcpy(before,&reply,sizeof(reply));
+        CHECK(CanLinkProtocol_MakeTransactionReply(0x89ABCDEFU,(uint8_t)phase,(uint8_t)detail,&reply)==(int)valid);
+        if(valid) {
+            CHECK(reply.id==0x322U && reply.length==8U && reply.extended==0U && reply.remote==0U && reply.fd==0U && reply.brs==0U);
+            CHECK(reply.data[0]==0x41U && reply.data[1]==2U && reply.data[2]==phase && reply.data[3]==detail);
+            CHECK(reply.data[4]==0xEFU && reply.data[5]==0xCDU && reply.data[6]==0xABU && reply.data[7]==0x89U);
+            RejectTransaction(&reply);RejectQuery(&reply);
+        } else CHECK(memcmp(before,&reply,sizeof(reply))==0);
+        memset(&reply,0x5A,sizeof(reply));memcpy(before,&reply,sizeof(reply));
+        CHECK(CanLinkProtocol_MakeTransactionReply(0U,(uint8_t)phase,(uint8_t)detail,&reply)==(int)(phase==7U && detail==0U));
+        if(phase!=7U || detail!=0U)CHECK(memcmp(before,&reply,sizeof(reply))==0);
+    }
+    CHECK(CanLinkProtocol_MakeTransactionReply(1U,2U,0U,NULL)==0);
+    CHECK(CanLinkProtocol_TransactionCrc32(NULL)==0U);
+    for(i=0U;i<4U;++i)CHECK(CanLinkProtocol_TransactionCrc32(words[i])==crc[i]);
+    for(field=0U;field<8U;++field)for(i=0U;i<32U;++i) {
+        memcpy(mutated,words[0],sizeof(mutated));mutated[field]^=1U<<i;
+        CHECK(CanLinkProtocol_TransactionCrc32(mutated)!=crc[0]);
+    }
+}
+
 int main(void)
 {
     ValidFrames();
@@ -475,6 +577,7 @@ int main(void)
     InvalidBootQueries();
     StopFrames();
     TargetFrames();
+    TransactionFrames();
     printf("CAN protocol HOST PASS: %u assertions\n", checks);
     return EXIT_SUCCESS;
 }

@@ -68,6 +68,7 @@ typedef struct {
      * May lag the core; unlike other mirrors, matching a retained ticket is
      * proof that this boot's STOP was handled, not that the motor is stationary. */
     uint32_t stop_applied_ticket;
+    uint32_t run_epoch; /* Coherent current epoch observation; Submit rechecks. */
 } CanLinkReadStatus;
 typedef void (*CanLinkStatusReader)(CanLinkReadStatus *snapshot);
 /* appTask only, bounded/nonblocking. Returns 1 with a nonzero ticket only
@@ -81,9 +82,42 @@ typedef uint8_t (*CanLinkTargetChecker)(int32_t speed_rpm, uint32_t iq_limit_ma)
  * Queries never refresh identity, authorize control or change a command. */
 typedef uint32_t (*CanLinkBootReader)(uint32_t words[4]);
 
-/* Bench-only, one startup call in appTask. No retry/recovery during this test. */
-void CanLink_Init(CanLinkStatusReader read_status, CanLinkStopRequester request_stop,
-                  CanLinkTargetChecker check_targets, CanLinkBootReader read_boot_identity);
+typedef struct {
+    uint32_t run_epoch;
+    uint32_t opcode;
+    int32_t speed_rpm;
+    uint32_t iq_limit_ma;
+    uint32_t ttl_ms;
+    uint32_t begin_timestamp; /* Original BEGIN SOF, low 16 bits; never renewed. */
+} CanLinkCommandRequest;
+
+typedef struct {
+    uint32_t command_seq;
+    uint32_t result;
+    uint32_t control_seq;
+} CanLinkCommandReceipt;
+
+/* appTask only, bounded. Submit returns the core result (0=accepted), and a
+ * nonzero internal sequence only on success. Receipt returns 1 after copying
+ * the coherent history, or 0 on failure. Neither callback retries internally. */
+typedef uint32_t (*CanLinkCommandSubmitter)(const CanLinkCommandRequest *request,
+                                          uint32_t *command_seq);
+typedef uint32_t (*CanLinkReceiptReader)(CanLinkCommandReceipt *receipt);
+typedef struct {
+    CanLinkStatusReader read_status;
+    CanLinkStopRequester request_stop;
+    CanLinkTargetChecker check_targets;
+    CanLinkBootReader read_boot_identity;
+    CanLinkCommandSubmitter submit_command;
+    CanLinkReceiptReader read_receipt;
+} CanLinkProviders;
+
+/* Bench-only, one startup call in appTask; providers are copied, not borrowed. */
+void CanLink_Init(const CanLinkProviders *providers);
+/* Task/IRQ read-only, bounded: no HAL calls, reloads, locks or state changes.
+ * Lifetime is 1..31250 nominal 32-us ticks, origin is a 16-bit hardware SOF.
+ * A valid result is an observation; final output must check again. */
+uint32_t CanLink_LeaseValid(uint32_t origin_tick, uint32_t lifetime_ticks);
 /* After resolver acquisition: <=1 receive, <=1 enqueue, no waits/heap.
  * STATUS/FAULT/STOP-result uses bounded PRIMASK copies, encoding/HAL outside.
  * Only one control producer per boot. STOP IDs never wrap; the latest accepted

@@ -12,7 +12,7 @@ typedef struct {
     uint32_t captured;
     uint32_t previous_total_us;
     uint32_t previous_acquisition_us;
-    uint32_t previous_telemetry_us;
+    uint32_t previous_telemetry_us; /* appTask enqueue time on the Bench */
     uint32_t previous_diagnostics_us;
     uint32_t sample_interval_us;
     uint32_t between_tasks_us;
@@ -25,6 +25,57 @@ typedef struct {
 } AppGapTrace;
 extern volatile AppGapTrace app_gap_trace;
 extern volatile uint32_t app_stack_probe_enabled;
+/* Idle hook only. Attempts at most one pending Bench telemetry frame. */
+void AppRuntime_ServiceIdleTelemetry(void);
+
+#define APP_READY_LOSS_POSITION  (1UL << 0)
+#define APP_READY_LOSS_SPEED     (1UL << 1)
+#define APP_READY_LOSS_DWT_AGE   (1UL << 2)
+#define APP_READY_LOSS_HAL_AGE   (1UL << 3)
+#define APP_READY_LOSS_CURRENT   (1UL << 4)
+#define APP_READY_LOSS_LOCKOUT   (1UL << 5)
+#define APP_READY_LOSS_FAULT     (1UL << 6)
+/* First active-command NOT_READY revoke, frozen by TIM1 after disarm.
+ * Ages refer to the exact feedback copy used for that ready decision.
+ * task_phase is a coarse task marker: 0 unmarked work/waiting, 1 acquisition,
+ * 2 CAN, 3 telemetry enqueue, 4 diagnostics; it is not a PC or a SAMPLE-edge record.
+ * Counters are observations at capture, not proof of this event's cause.
+ * Read only when captured=1; no field is an input to control or recovery. */
+typedef struct {
+    uint32_t captured;
+    uint32_t reason_bits;
+    uint32_t age_cycles;
+    uint32_t age_ms;
+    uint32_t sample_seq;
+    uint32_t command_seq;
+    uint32_t epoch_before;
+    uint32_t epoch_after;
+    uint32_t task_phase;
+    uint32_t gap_count;
+    uint32_t spi_errors;
+    uint32_t deadline_misses;
+} AppReadyLossTrace;
+extern volatile AppReadyLossTrace app_ready_loss_trace;
+
+enum {
+    APP_TASK_INTERVAL_WAITING = 0,
+    APP_TASK_INTERVAL_COMPLETE,
+    APP_TASK_INTERVAL_UNAVAILABLE
+};
+/* One appTask-owned partition of the edge interval in ad2s_age_trace.
+ * State COMPLETE publishes all three durations. UINT32_MAX means unavailable.
+ * Between-step elapsed time includes scheduling, loop overhead and preemption. */
+typedef struct {
+    uint32_t state;
+    uint32_t old_edge_to_end_cycles;
+    uint32_t between_steps_cycles;
+    uint32_t entry_to_edge_cycles;
+    /* Subsets of old_edge_to_end_cycles in the same source step. Both stay
+     * UINT32_MAX if inconsistent. Zero queue time is expected when telemetry was not due. */
+    uint32_t old_edge_to_acquisition_end_cycles;
+    uint32_t old_telemetry_queue_cycles;
+} AppTaskIntervalTrace;
+extern volatile AppTaskIntervalTrace app_task_interval_trace;
 #endif
 
 /* Startup identity: immutable after the single pre-scheduler attempt.

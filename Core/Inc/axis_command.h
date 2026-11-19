@@ -32,6 +32,18 @@ void AxisCommandPort_Init(void);
  * Wrong task/ISR/kernel context returns AXIS_CMD_INVALID_CONTEXT. */
 uint32_t AxisCommandPort_CheckTargets(float speed_target_rpm, float iq_limit_a);
 uint32_t AxisCommandPort_Submit(const AxisCommandFrame *request, uint32_t *seq);
+/* appTask only; Bench-only hardware-timed publication. origin_tick is the
+ * original first-frame SOF (0..65535), lifetime_ticks is 1..31250 at nominal
+ * 32 us/tick. The two caller HAL timestamp fields are ignored: an auxiliary
+ * HAL window keeps the unchanged pure core contract; it NEVER replaces or
+ * extends the original hardware deadline. Ordinary profile is unsupported. */
+uint32_t AxisCommandPort_SubmitTimed(const AxisCommandFrame *request,
+    uint32_t origin_tick, uint32_t lifetime_ticks, uint32_t *seq);
+/* appTask only, before every CanLink_Poll: latch expired timed sequences even
+ * if TIM1 is not serviced. Does not modify core state or outputs. The <=200 ms
+ * service-progress contract prevents raw16 wrap from making a lease young again.
+ * TIM1 remains the only consumer that disarms/revokes; ordinary profile is no-op. */
+void AxisCommandPort_ObserveTime(void);
 uint32_t AxisCommandPort_Stop(uint32_t *ticket);
 uint32_t AxisCommandPort_GetEpoch(void);
 

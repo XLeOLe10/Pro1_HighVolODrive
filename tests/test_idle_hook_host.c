@@ -1,9 +1,12 @@
-/* Host checks for the exact USER CODE 2 idle hook extracted from freertos.c.
- * Stub time/stack API only: this does not simulate the scheduler or IRQ latency. */
+/* Production idle hook, appTask due-time branch, telemetry handoff and CSV format.
+ * Inject task releases at the formatter and UART boundaries. HAL, time and stack
+ * are simulated; scheduler/IRQ latency and wire delivery require hardware. */
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include "telemetry_format.h"
 #include "app_policy.h"
 
 typedef void *TaskHandle_t;
@@ -39,6 +42,96 @@ static UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t task)
     return mock_free_words;
 }
 
+
+static unsigned interrupt_mask;
+static struct { uint32_t CYCCNT; } cycle_counter;
+#define DWT (&cycle_counter)
+#define __get_PRIMASK() (interrupt_mask)
+#define __disable_irq() ((void)(interrupt_mask = 1U))
+#define __set_PRIMASK(saved) ((void)(interrupt_mask = (saved)))
+#define __DMB() ((void)0)
+static void RecordCriticalCycles(uint32_t start)
+{
+    (void)start;
+    CHECK(interrupt_mask == 1U);
+}
+
+typedef struct { unsigned gState; } UART_HandleTypeDef;
+enum { HAL_UART_STATE_READY = 1U, HAL_UART_STATE_BUSY_TX, HAL_OK, HAL_ERROR };
+static UART_HandleTypeDef huart1;
+static unsigned uart_result = HAL_OK;
+static unsigned format_calls, uart_calls;
+static unsigned interrupt_site;
+enum { INSIDE_FORMAT = 1U, INSIDE_UART };
+static uint32_t interrupt_tick;
+static unsigned queue_on_interrupt;
+static void run_background_due(uint32_t now);
+static void interrupt_at(unsigned site)
+{
+    if (interrupt_site != site) return;
+    interrupt_site = 0U;
+    mock_tick = interrupt_tick;
+    if (queue_on_interrupt) run_background_due(mock_tick);
+}
+
+static size_t observe_format(char *dst, size_t capacity, float reference, float feedback)
+{
+    CHECK(interrupt_mask == 0U);
+    ++format_calls;
+    interrupt_at(INSIDE_FORMAT);
+    return TelemetryFormat_SpeedCsv(dst, capacity, reference, feedback);
+}
+
+static uint8_t *uart_buffer;
+static uint16_t uart_length;
+static int HAL_UART_Transmit_IT(UART_HandleTypeDef *port, uint8_t *data, uint16_t length)
+{
+    CHECK(interrupt_mask == 0U);
+    CHECK(port == &huart1 && port->gState == HAL_UART_STATE_READY);
+    ++uart_calls;
+    interrupt_at(INSIDE_UART);
+    if (uart_result == HAL_OK)
+    {
+        uart_buffer = data;
+        uart_length = length;
+        port->gState = HAL_UART_STATE_BUSY_TX;
+    }
+    return (int)uart_result;
+}
+
+#define TelemetryFormat_SpeedCsv observe_format
+#include "telemetry_under_test.h"
+#undef TelemetryFormat_SpeedCsv
+
+static void run_background_due(uint32_t now)
+{
+#if AXIS_COMMAND_BENCH_ENABLE
+    static struct { uint32_t telemetry_cycles; } work_timing;
+    static uint32_t app_task_phase;
+    uint32_t section_started;
+#endif
+    mock_tick = now;
+#include "telemetry_cadence.h"
+#if AXIS_COMMAND_BENCH_ENABLE
+    (void)work_timing.telemetry_cycles;
+    CHECK(app_task_phase == 0U);
+#endif
+}
+
+static void sample(float reference, float feedback, uint32_t now)
+{
+    telemetry_ref_rpm = reference;
+    telemetry_feedback_rpm = feedback;
+    run_background_due(now);
+}
+
+static void check_uart_bytes(const char *expected)
+{
+    CHECK(uart_buffer == telemetry_buffer);
+    CHECK(uart_length == strlen(expected));
+    CHECK(memcmp(uart_buffer, expected, uart_length) == 0);
+}
+
 #include "idle_hook_under_test.h"
 
 static void expect_no_scan(uint32_t tick)
@@ -68,6 +161,114 @@ static void expect_scan(uint32_t tick, uint32_t elapsed,
     CHECK(app_stack_probe_count == before_count + 1U);
     CHECK(app_stack_probe_last_tick_ms == (uint32_t)(tick + elapsed));
     CHECK(app_stack_min_free_bytes == expected_min);
+}
+
+
+static void test_telemetry(void)
+{
+    unsigned before_checks = checks;
+    CHECK(APP_TELEMETRY_PERIOD_MS == 5U);
+    CHECK(current_telemetry_tx_count == 0U && current_telemetry_drop_count == 0U);
+    huart1.gState = HAL_UART_STATE_READY;
+    sample(1.0f, 2.0f, 4U); /* one tick too early */
+    CHECK(format_calls == 0U && uart_calls == 0U);
+    sample(12.5f, -3.0f, 5U);
+#if AXIS_COMMAND_BENCH_ENABLE
+    /* Empty/uncreated task or disabled stack measurement must not cause a
+     * transmit from appTask. The first idle after creation consumes the pair. */
+    CHECK(format_calls == 0U && uart_calls == 0U);
+    telemetry_ref_rpm = 99.0f;
+    telemetry_feedback_rpm = -88.0f;
+    appTaskHandle = NULL;
+    vApplicationIdleHook();
+    CHECK(format_calls == 0U && uart_calls == 0U);
+    appTaskHandle = &app_task_token;
+    app_stack_probe_enabled = 0U;
+    mock_tick = 9U; /* captured pair still usable at age 4 */
+    vApplicationIdleHook();
+#else
+    /* Normal target must launch directly from the due step. */
+    CHECK(format_calls == 1U && uart_calls == 1U);
+    vApplicationIdleHook();
+#endif
+    CHECK(current_telemetry_tx_count == 1U && current_telemetry_drop_count == 0U);
+    CHECK(format_calls == 1U && uart_calls == 1U);
+    check_uart_bytes("12.500,-3.000\r\n");
+    for (unsigned i = 0; i < 5U; ++i) vApplicationIdleHook();
+    CHECK(format_calls == 1U && uart_calls == 1U);
+    sample(300.0f, 400.0f, 10U); /* TX IRQ still owns buffer */
+    CHECK(current_telemetry_drop_count == 1U && uart_calls == 1U);
+    check_uart_bytes("12.500,-3.000\r\n");
+    huart1.gState = HAL_UART_STATE_READY;
+    sample(10000000.0f, 100.0f, 15U); /* outside CSV encoding range */
+    vApplicationIdleHook();
+    CHECK(current_telemetry_drop_count == 2U && current_telemetry_tx_count == 1U);
+    CHECK(format_calls == 2U && uart_calls == 1U);
+    check_uart_bytes("12.500,-3.000\r\n");
+    uart_result = HAL_ERROR;
+    sample(1.0f, 2.0f, 20U);
+    vApplicationIdleHook();
+    CHECK(format_calls == 3U && uart_calls == 2U);
+    CHECK(current_telemetry_drop_count == 3U && current_telemetry_tx_count == 1U);
+    uart_result = HAL_OK;
+#if AXIS_COMMAND_BENCH_ENABLE
+    sample(5.0f, 6.0f, 25U);
+    mock_tick = 30U; /* exactly expired */
+    vApplicationIdleHook();
+    CHECK(uart_calls == 2U && current_telemetry_drop_count == 4U);
+    vApplicationIdleHook();
+    CHECK(current_telemetry_drop_count == 4U);
+    sample(7.0f, 8.0f, 35U);
+    huart1.gState = HAL_UART_STATE_BUSY_TX; /* check again at consumption */
+    vApplicationIdleHook();
+    CHECK(uart_calls == 2U && current_telemetry_drop_count == 5U);
+    huart1.gState = HAL_UART_STATE_READY;
+    sample(9.0f, -9.0f, 40U);
+    interrupt_site = INSIDE_FORMAT;
+    interrupt_tick = 45U;
+    queue_on_interrupt = 0U;
+    vApplicationIdleHook(); /* age advances without a second producer release */
+    CHECK(interrupt_site == 0U && uart_calls == 2U && current_telemetry_drop_count == 6U);
+    sample(50.5f, 51.0f, 50U);
+    telemetry_ref_rpm = 55.0f;
+    telemetry_feedback_rpm = 56.0f;
+    interrupt_site = INSIDE_FORMAT;
+    interrupt_tick = 55U;
+    queue_on_interrupt = 1U;
+    vApplicationIdleHook();
+    CHECK(interrupt_site == 0U && uart_calls == 2U);
+    CHECK(current_telemetry_drop_count == 8U); /* one due pair and one stale pair */
+    sample(60.0f, -60.0f, 60U);
+    telemetry_ref_rpm = 65.0f;
+    telemetry_feedback_rpm = 66.0f;
+    interrupt_site = INSIDE_UART;
+    interrupt_tick = 65U;
+    vApplicationIdleHook();
+    CHECK(interrupt_site == 0U && uart_calls == 3U);
+    CHECK(current_telemetry_tx_count == 2U && current_telemetry_drop_count == 9U);
+    check_uart_bytes("60.000,-60.000\r\n");
+    huart1.gState = HAL_UART_STATE_READY;
+    sample(70.0f, 71.0f, 70U);
+    run_background_due(75U); /* following due pair clashes with occupied slot */
+    mock_tick = 71U; /* very late Idle with raw tick aliased near first due pair */
+    vApplicationIdleHook();
+    CHECK(uart_calls == 3U && current_telemetry_drop_count == 11U);
+    sample(-72.0f, 73.0f, UINT32_MAX - 1U);
+    mock_tick = 2U; /* four ticks later over wrap */
+    vApplicationIdleHook();
+    CHECK(uart_calls == 4U && current_telemetry_tx_count == 3U);
+    check_uart_bytes("-72.000,73.000\r\n");
+    huart1.gState = HAL_UART_STATE_READY;
+    sample(74.0f, -75.0f, 3U);
+    mock_tick = 8U;
+    vApplicationIdleHook();
+    CHECK(uart_calls == 4U && current_telemetry_drop_count == 12U);
+    app_stack_probe_enabled = 1U;
+#endif
+    CHECK(interrupt_mask == 0U);
+    printf("PASS: %s scheduled telemetry, %u checks, %u UART calls, %u successful, %u dropped\n",
+           AXIS_COMMAND_BENCH_ENABLE ? "bench deferred" : "normal direct",
+           checks - before_checks, uart_calls, (unsigned)current_telemetry_tx_count, (unsigned)current_telemetry_drop_count);
 }
 
 int main(void)
@@ -118,5 +319,6 @@ int main(void)
 
     printf("PASS: %s idle hook, %u checks, %u actual hook scans\n",
            AXIS_COMMAND_BENCH_ENABLE ? "bench" : "normal", checks, scan_calls);
+    test_telemetry();
     return 0;
 }

@@ -2,6 +2,7 @@
 #include "current_sense.h"
 #include "Xmath.h"
 
+/* CURRENT MONITOR PROCESS BEGIN: tested from this production block on the host. */
 /* Board scaling: CC6905S8-3FB050 output sensitivity is 26.4 mV/A. */
 #define CURRENT_MONITOR_VREF_V              3.300f
 #define CURRENT_MONITOR_ADC_FULL_SCALE       4096.0f
@@ -73,12 +74,20 @@ uint8_t CurrentMonitor_IsReady(void)
     return monitor_ready;
 }
 
+#if AXIS_COMMAND_BENCH_ENABLE
+void CurrentMonitor_ProcessRaw_20kHz(float electrical_angle_rad,
+                                    uint16_t raw_u, uint16_t raw_v,
+                                    uint16_t raw_w, uint16_t raw_bus)
+#else
 void CurrentMonitor_Run_20kHz(float electrical_angle_rad)
+#endif
 {
+#if !AXIS_COMMAND_BENCH_ENABLE
     uint16_t raw_u;
     uint16_t raw_v;
     uint16_t raw_w;
     uint16_t raw_bus;
+#endif
     float ia;
     float ib;
     float ic;
@@ -89,12 +98,14 @@ void CurrentMonitor_Run_20kHz(float electrical_angle_rad)
     float id;
     float iq;
 
+#if !AXIS_COMMAND_BENCH_ENABLE
     if (CurrentSense_HasNewSample() == 0U)
     {
         return;
     }
 
     CurrentSense_GetRaw(&raw_u, &raw_v, &raw_w, &raw_bus);
+#endif
     monitor_sample_sequence++; /* TIM1-owned; confirms this iteration consumed a frame. */
     monitor_vbus_v = (float)raw_bus * CURRENT_MONITOR_VREF_V /
                      CURRENT_MONITOR_ADC_FULL_SCALE *
@@ -148,3 +159,4 @@ void CurrentMonitor_Run_20kHz(float electrical_angle_rad)
     monitor_id_a = id;
     monitor_iq_a = iq;
 }
+/* CURRENT MONITOR PROCESS END */

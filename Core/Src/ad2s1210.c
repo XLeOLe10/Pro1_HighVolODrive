@@ -106,11 +106,95 @@ static uint32_t ad2s_previous_sample_tick_ms = 0U;
 static uint8_t ad2s_position_speed_ready = 0U;
 static volatile AD2S1210_FeedbackSnapshot ad2s_snapshot;
 
+#if AXIS_COMMAND_BENCH_ENABLE
+/* AD2S AGE TRACE BEGIN: actual event pairing tested on the host. */
+volatile AD2S1210_AgeTrace ad2s_age_trace = {
+    AD2S_AGE_IDLE, 0U, 0U, UINT32_MAX, UINT32_MAX, UINT32_MAX
+};
+static volatile uint32_t age_source_cycles;
+static volatile uint32_t age_source_tick_ms;
+
+void AD2S1210_ArmAgeTrace(const AD2S1210_FeedbackSnapshot *source,
+                         uint32_t check_cycles)
+{
+    uint32_t state = AD2S_AGE_UNKNOWN;
+    if (ad2s_age_trace.state != AD2S_AGE_IDLE)
+        return;
+
+    if (source != NULL)
+    {
+        age_source_cycles = source->sample_cycles;
+        age_source_tick_ms = source->sample_tick_ms;
+        ad2s_age_trace.source_sequence = source->sequence;
+        ad2s_age_trace.check_age_cycles = (uint32_t)(check_cycles - source->sample_cycles);
+        if ((source->valid != 0U) && (source->speed_valid != 0U) &&
+            (ad2s_dwt_ready != 0U))
+            state = AD2S_AGE_PENDING;
+    }
+    __DMB();
+    ad2s_age_trace.state = state;
+}
+
+/* Called only by the serialized publisher after observing PENDING. On a
+   single core TIM1 may have armed *after* this very snapshot became visible.
+   Its matching source callback then leaves the request for the next attempt. */
+static void AD2S1210_CompleteAgeTrace(const AD2S1210_FeedbackSnapshot *next,
+                                      uint32_t published_cycles)
+{
+    uint32_t source_seq = ad2s_age_trace.source_sequence;
+    uint32_t state = AD2S_AGE_UNKNOWN;
+    uint32_t edge_span;
+    uint32_t publish_span;
+    uint32_t wall_ms;
+
+    if (next->sequence == source_seq)
+        return;
+    ad2s_age_trace.next_sequence = next->sequence;
+    if (next->sequence == (uint32_t)(source_seq + 1U))
+    {
+        if (next->valid == 0U)
+        {
+            /* The invalid snapshot carries the old timestamp. */
+            state = AD2S_AGE_INVALID_NEXT;
+        }
+        else
+        {
+            edge_span = (uint32_t)(next->sample_cycles - age_source_cycles);
+            publish_span = (uint32_t)(published_cycles - age_source_cycles);
+            wall_ms = (uint32_t)(HAL_GetTick() - age_source_tick_ms);
+            /* 1 second is far below half a DWT wrap at 200 MHz. The separate
+               millisecond clock rejects a long pause across a DWT wrap.
+               A replay captured while clocks are halted needs a fresh run. */
+            if ((ad2s_dwt_ready != 0U) &&
+                ((DWT->CTRL & DWT_CTRL_CYCCNTENA_Msk) != 0U) &&
+                (wall_ms <= 1000U) &&
+                ((uint32_t)(next->sample_tick_ms - age_source_tick_ms) <= wall_ms) &&
+                (publish_span < 0x80000000UL) && (publish_span <= SystemCoreClock) &&
+                (ad2s_age_trace.check_age_cycles != 0U) &&
+                (ad2s_age_trace.check_age_cycles < publish_span) &&
+                (edge_span != 0U) && (edge_span < publish_span))
+            {
+                ad2s_age_trace.edge_interval_cycles = edge_span;
+                ad2s_age_trace.edge_to_publish_cycles = publish_span - edge_span;
+                state = (edge_span <= ad2s_age_trace.check_age_cycles) ?
+                    AD2S_AGE_EDGE_BY_CHECK : AD2S_AGE_EDGE_AFTER_CHECK;
+            }
+        }
+    }
+    __DMB();
+    ad2s_age_trace.state = state;
+}
+/* AD2S AGE TRACE END */
+#endif
+
 static void AD2S1210_PublishSnapshot(const AD2S1210_FeedbackSnapshot *snapshot)
 {
     uint32_t saved_primask;
     uint32_t start_cycles;
     uint32_t elapsed_cycles;
+#if AXIS_COMMAND_BENCH_ENABLE
+    uint32_t published_cycles;
+#endif
 
     /* PRIMASK also excludes priority-0 TIM1. This region contains only
        eight fixed field copies/barriers, no SPI or float calculations.
@@ -128,12 +212,22 @@ static void AD2S1210_PublishSnapshot(const AD2S1210_FeedbackSnapshot *snapshot)
     ad2s_snapshot.speed_valid = snapshot->speed_valid;
     ad2s_snapshot.fault = snapshot->fault;
     __DMB();
+#if AXIS_COMMAND_BENCH_ENABLE
+    /* Reuse the existing endpoint after the payload barrier, before unmask. */
+    published_cycles = DWT->CYCCNT;
+    elapsed_cycles = (uint32_t)(published_cycles - start_cycles);
+#else
     elapsed_cycles = (uint32_t)(DWT->CYCCNT - start_cycles);
+#endif
     if (elapsed_cycles > ad2s_snapshot_max_cycles)
     {
         ad2s_snapshot_max_cycles = elapsed_cycles;
     }
     __set_PRIMASK(saved_primask);
+#if AXIS_COMMAND_BENCH_ENABLE
+    if (ad2s_age_trace.state == AD2S_AGE_PENDING)
+        AD2S1210_CompleteAgeTrace(snapshot, published_cycles);
+#endif
 }
 
 void AD2S1210_GetSnapshot(AD2S1210_FeedbackSnapshot *snapshot)

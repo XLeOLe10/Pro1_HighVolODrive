@@ -25,6 +25,19 @@ static uint32_t host_mask, host_ipsr, host_now;
 static unsigned disables, barriers, restores, irq_calls, safety_calls;
 static uint32_t irq_pending, inject_on_disable;
 static uint32_t inspect_disarm, disarm_active, disarm_epoch, disarm_seq;
+#if AXIS_COMMAND_BENCH_ENABLE
+static uint32_t clock_tick, clock_trusted;
+static unsigned lease_calls, fail_lease_call;
+/* Deterministic raw-clock adapter only; real FDCAN trust/config/TOO behavior is
+ * verified by the CAN service HOST and ultimately by the board, not this stub. */
+uint32_t CanLink_LeaseValid(uint32_t origin, uint32_t lifetime)
+{
+    ++lease_calls;
+    if (lease_calls == fail_lease_call) return 0U;
+    return clock_trusted && origin <= 0xFFFFU && lifetime != 0U &&
+        lifetime <= 31250U && (uint32_t)(uint16_t)(clock_tick-origin) < lifetime;
+}
+#endif
 
 static void DispatchIrq(void)
 {
@@ -105,6 +118,9 @@ static void Reset(void)
     host_dwt.CYCCNT = 0U;
     kernel_state = osKernelRunning;
     current_thread = appTaskHandle;
+#if AXIS_COMMAND_BENCH_ENABLE
+    clock_tick = 0U; clock_trusted = 1U; lease_calls = fail_lease_call = 0U;
+#endif
     AxisCommandPort_Init();
 }
 
@@ -621,13 +637,266 @@ static void TestReceiptNormalProfile(void)
 }
 #endif
 
+static void TestTimedContextAndProfile(void)
+{
+    AxisCommandFrame f;
+    uint32_t seq = 99U;
+    Reset(); f = Frame(1U, AXIS_CMD_START, 100.0f, 1.0f, 500U);
+    CHECK(AxisCommandPort_SubmitTimed(NULL, 0U, 1U, &seq) == AXIS_CMD_INVALID && seq == 0U);
+    CHECK(AxisCommandPort_SubmitTimed(&f, 0U, 1U, NULL) == AXIS_CMD_INVALID);
+    host_ipsr = 25U;
+    CHECK(AxisCommandPort_SubmitTimed(&f, 0U, 1U, &seq) == AXIS_CMD_INVALID);
+    host_ipsr = 0U; current_thread = &wrong_token;
+    CHECK(AxisCommandPort_SubmitTimed(&f, 0U, 1U, &seq) == AXIS_CMD_INVALID);
+    current_thread = appTaskHandle; kernel_state = osKernelInactive;
+    CHECK(AxisCommandPort_SubmitTimed(&f, 0U, 1U, &seq) == AXIS_CMD_INVALID);
+    kernel_state = osKernelRunning;
+#if AXIS_COMMAND_BENCH_ENABLE
+    CHECK(AxisCommandPort_SubmitTimed(&f, 65536U, 1U, &seq) == AXIS_CMD_INVALID);
+    CHECK(AxisCommandPort_SubmitTimed(&f, 0U, 0U, &seq) == AXIS_CMD_INVALID);
+    CHECK(AxisCommandPort_SubmitTimed(&f, 0U, 31251U, &seq) == AXIS_CMD_INVALID);
+    CHECK(seq == 0U && lease_calls == 0U && disables == 0U);
+    CHECK(AxisCommandPort_SubmitTimed(&f, 0U, 31250U, &seq) == AXIS_CMD_OK);
+    RequestIrq(); CHECK(Snapshot().active.expires_tick_ms == 1000U);
+#else
+    CHECK(AxisCommandPort_SubmitTimed(&f, 0U, 100U, &seq) == AXIS_CMD_UNSUPPORTED_MODE);
+    CHECK(seq == 0U && disables == 0U);
+#endif
+}
+
+#if AXIS_COMMAND_BENCH_ENABLE
+static void TestTimedAtomicAndRawDeadline(void)
+{
+    AxisCommandFrame f, original;
+    AxisCommandSnapshot out;
+    AxisCommandReceipt applied;
+    uint32_t seq;
+    Reset(); host_now = 5U; clock_tick = 0U;
+    f = Frame(1U, AXIS_CMD_START, 100.0f, 1.0f, 500U);
+    f.received_tick_ms = 0x80000000U; f.expires_tick_ms = 0U; original = f;
+    inject_on_disable = 1U;
+    CHECK(AxisCommandPort_SubmitTimed(&f, 0xFFF0U, 100U, &seq) == AXIS_CMD_OK);
+    CHECK(irq_calls == 1U && host_mask == 0U && irq_pending == 0U);
+    CHECK(memcmp(&f, &original, sizeof(f)) == 0);
+    out = Snapshot(); applied = Receipt();
+    CHECK(out.active_valid == 1U && out.permit == 1U && out.active.command_seq == seq);
+    CHECK(out.active.received_tick_ms == 5U && out.active.expires_tick_ms == 9U);
+    CHECK(applied.command_seq == seq && applied.result == AXIS_CMD_APPLIED);
+    clock_tick = 0x53U; RequestIrq(); CHECK(Snapshot().active_valid == 1U);
+    /* HAL time is frozen; original raw SOF deadline still wins at exactly 100 ticks. */
+    clock_tick = 0x54U; board_output_enabled = 1U;
+    inspect_disarm = 1U; disarm_active = 1U; disarm_epoch = 1U; disarm_seq = seq;
+    RequestIrq(); out = Snapshot();
+    CHECK(out.active_valid == 0U && out.permit == 0U && out.result == AXIS_CMD_EXPIRED);
+    CHECK(out.run_epoch == 2U && board_output_enabled == 0U && inspect_disarm == 0U);
+    CheckReceiptUnchanged(&applied);
+}
+
+static void TestTimedPublishRecheck(void)
+{
+    AxisCommandFrame f;
+    AxisCommandSnapshot out;
+    uint32_t seq = 99U;
+    Reset(); f = Frame(1U, AXIS_CMD_START, 100.0f, 1.0f, 500U);
+    fail_lease_call = 2U; inject_on_disable = 1U;
+    CHECK(AxisCommandPort_SubmitTimed(&f, 0U, 100U, &seq) == AXIS_CMD_EXPIRED);
+    CHECK(seq == 0U && irq_calls == 1U && host_mask == 0U && lease_calls == 2U);
+    out = Snapshot(); CHECK(out.active_valid == 0U && out.applied_seq == 0U);
+    CHECK(Receipt().command_seq == 0U);
+    clock_trusted = 0U; seq = 99U;
+    CHECK(AxisCommandPort_SubmitTimed(&f, 0U, 100U, &seq) == AXIS_CMD_EXPIRED && seq == 0U);
+    clock_trusted = 1U; clock_tick = 100U;
+    CHECK(AxisCommandPort_SubmitTimed(&f, 0U, 100U, &seq) == AXIS_CMD_EXPIRED && seq == 0U);
+}
+
+static void TestTimedActiveAndPendingExpiry(void)
+{
+    unsigned mode;
+    for (mode = 0U; mode < 2U; ++mode)
+    {
+        AxisCommandFrame f;
+        AxisCommandSnapshot out;
+        AxisCommandReceipt receipt;
+        uint32_t active_seq, pending_seq, old_control;
+        Reset(); clock_tick = 100U;
+        f = Frame(1U, AXIS_CMD_START, 100.0f, 1.0f, 500U);
+        CHECK(AxisCommandPort_SubmitTimed(&f, 100U, mode ? 1000U : 100U, &active_seq) == AXIS_CMD_OK);
+        RequestIrq(); old_control = Snapshot().control_seq;
+        clock_tick = mode ? 100U : 199U;
+        f = Frame(1U, AXIS_CMD_UPDATE, -100.0f, 2.0f, 500U);
+        CHECK(AxisCommandPort_SubmitTimed(&f, clock_tick, mode ? 1U : 100U, &pending_seq) == AXIS_CMD_OK);
+        clock_tick = mode ? 101U : 200U; board_output_enabled = 1U;
+        inspect_disarm = 1U; disarm_active = 1U; disarm_epoch = 1U; disarm_seq = active_seq;
+        RequestIrq(); out = Snapshot(); receipt = Receipt();
+        CHECK(out.active_valid == 0U && out.run_epoch == 2U && out.applied_seq == active_seq);
+        CHECK(out.cancelled_seq == pending_seq && out.result == AXIS_CMD_EXPIRED);
+        CHECK(receipt.command_seq == pending_seq && receipt.result == AXIS_CMD_EXPIRED);
+        CHECK(receipt.control_seq == old_control && out.control_seq == old_control + 1U);
+        CHECK(board_output_enabled == 0U && inspect_disarm == 0U);
+    }
+}
+
+static void TestTimedFinalGateAndPause(void)
+{
+    unsigned mode;
+    for (mode = 0U; mode < 4U; ++mode)
+    {
+        AxisCommandFrame f;
+        AxisCommandSnapshot out;
+        AxisCommandReceipt receipt;
+        uint32_t seq;
+        Reset(); clock_tick = 500U;
+        f = Frame(1U, AXIS_CMD_START, 100.0f, 1.0f, 500U);
+        CHECK(AxisCommandPort_SubmitTimed(&f, 500U, 10U, &seq) == AXIS_CMD_OK);
+        if (mode != 3U) RequestIrq(); /* mode 3 loses time while only pending. */
+        if (mode == 0U) clock_tick = 510U;
+        else clock_trusted = 0U; /* TOO/clock trust fails, HAL remains unchanged. */
+        if (mode < 2U)
+        {
+            board_output_enabled = 1U;
+            inspect_disarm = 1U; disarm_active = 1U; disarm_epoch = 1U; disarm_seq = seq;
+            host_ipsr = 25U;
+            CHECK(AxisCommandPort_FinalPermit(host_now) == 0U);
+            host_ipsr = 0U;
+            CHECK(inspect_disarm == 0U && board_output_enabled == 0U);
+        }
+        else RequestIrq();
+        out = Snapshot(); receipt = Receipt();
+        CHECK(out.active_valid == 0U && out.permit == 0U && out.result == AXIS_CMD_EXPIRED);
+        CHECK(out.run_epoch == 2U && receipt.command_seq == seq);
+        CHECK(receipt.result == (mode == 3U ? AXIS_CMD_EXPIRED : AXIS_CMD_APPLIED));
+        clock_trusted = 1U; clock_tick = 500U; RequestIrq();
+        CHECK(Snapshot().active_valid == 0U); /* Wrapped/restored clocks cannot revive it. */
+    }
+}
+
+static void TestTimedStopAndFaultPrecedence(void)
+{
+    unsigned mode;
+    for (mode = 0U; mode < 2U; ++mode)
+    {
+        AxisCommandFrame f;
+        AxisCommandReceipt receipt;
+        AxisCommandSnapshot out;
+        uint32_t seq, ticket;
+        Reset(); f = Frame(1U, AXIS_CMD_START, 100.0f, 1.0f, 500U);
+        CHECK(AxisCommandPort_SubmitTimed(&f, 0U, 100U, &seq) == AXIS_CMD_OK);
+        CHECK(AxisCommandPort_Stop(&ticket) == AXIS_CMD_OK);
+        clock_trusted = 0U; if (mode) board_fault_mask = 8U;
+        RequestIrq(); out = Snapshot(); receipt = Receipt();
+        CHECK(receipt.command_seq == seq && receipt.result == (mode ? AXIS_CMD_FAULT : AXIS_CMD_STOPPED));
+        CHECK(out.stop_applied_ticket == ticket && out.active_valid == 0U);
+    }
+}
+
+static void TestTimedObserverPreventsWrapRevival(void)
+{
+    unsigned mode;
+    for (mode = 0U; mode < 2U; ++mode)
+    {
+        AxisCommandFrame f;
+        AxisCommandSnapshot before, after;
+        uint32_t seq, next_seq;
+        unsigned calls, locked, safety_before;
+        Reset(); clock_tick = 100U;
+        calls = lease_calls; locked = disables;
+        AxisCommandPort_ObserveTime();
+        CHECK(lease_calls == calls && disables == locked);
+        f = Frame(1U, AXIS_CMD_START, 100.0f, 1.0f, 500U);
+        CHECK(AxisCommandPort_SubmitTimed(&f, 100U, 100U, &seq) == AXIS_CMD_OK);
+        if (mode == 0U) RequestIrq();
+        before = Snapshot(); safety_before = safety_calls;
+        clock_tick = 200U; /* Real time expired; TIM1 and HAL tick now stop. */
+        host_ipsr = 25U; calls = lease_calls;
+        AxisCommandPort_ObserveTime(); CHECK(lease_calls == calls);
+        host_ipsr = 0U; current_thread = &wrong_token;
+        AxisCommandPort_ObserveTime(); CHECK(lease_calls == calls);
+        current_thread = appTaskHandle;
+        AxisCommandPort_ObserveTime(); CHECK(lease_calls > calls);
+        CHECK(safety_calls == safety_before); /* Task must not touch outputs/core. */
+        clock_tick = 100U; /* A complete raw16 revolution makes modulo age zero. */
+        after = Snapshot();
+        CHECK(after.active_valid == before.active_valid && after.run_epoch == before.run_epoch);
+        CHECK(after.applied_seq == before.applied_seq && after.permit == 0U);
+        RequestIrq(); after = Snapshot();
+        CHECK(after.active_valid == 0U && after.result == AXIS_CMD_EXPIRED && after.run_epoch == 2U);
+        CHECK(Receipt().result == (mode ? AXIS_CMD_EXPIRED : AXIS_CMD_APPLIED));
+        /* Later sequence may be used after the old epoch was revoked; the
+         * watermark is not cleared or allowed to poison a new sequence. */
+        f = Frame(2U, AXIS_CMD_START, 200.0f, 1.0f, 500U);
+        CHECK(AxisCommandPort_SubmitTimed(&f, 100U, 100U, &next_seq) == AXIS_CMD_OK);
+        CHECK(next_seq > seq); RequestIrq();
+        CHECK(Snapshot().active_valid == 1U && Snapshot().permit == 1U);
+    }
+}
+
+static void TestTimedMetadataLifecycle(void)
+{
+    AxisCommandFrame f;
+    AxisCommandSnapshot out;
+    AxisCommandReceipt receipt;
+    uint32_t seq, other_seq, ticket;
+    unsigned calls, mode;
+    /* A BUSY rejected replacement must preserve the occupied pending lease. */
+    Reset(); clock_tick = 100U; f = Frame(1U, AXIS_CMD_START, 100.0f, 1.0f, 500U);
+    CHECK(AxisCommandPort_SubmitTimed(&f, 100U, 10U, &seq) == AXIS_CMD_OK);
+    CHECK(AxisCommandPort_SubmitTimed(&f, 100U, 1000U, &other_seq) == AXIS_CMD_BUSY && other_seq == 0U);
+    clock_tick = 110U; RequestIrq(); receipt = Receipt();
+    CHECK(receipt.command_seq == seq && receipt.result == AXIS_CMD_EXPIRED);
+    /* A processed/rejected START must not replace an older active timed lease. */
+    Reset(); f = Frame(1U, AXIS_CMD_START, 100.0f, 1.0f, 500U);
+    CHECK(AxisCommandPort_SubmitTimed(&f, 0U, 10U, &seq) == AXIS_CMD_OK); RequestIrq();
+    CHECK(AxisCommandPort_SubmitTimed(&f, 0U, 1000U, &other_seq) == AXIS_CMD_OK); RequestIrq();
+    CHECK(Receipt().result == AXIS_CMD_ALREADY_RUNNING);
+    clock_tick = 10U; RequestIrq(); CHECK(Snapshot().active_valid == 0U);
+    /* Applied legacy UPDATE explicitly replaces the timed sidecar. */
+    Reset(); f = Frame(1U, AXIS_CMD_START, 100.0f, 1.0f, 500U);
+    CHECK(AxisCommandPort_SubmitTimed(&f, 0U, 10U, &seq) == AXIS_CMD_OK); RequestIrq();
+    f = Frame(1U, AXIS_CMD_UPDATE, 200.0f, 2.0f, 500U);
+    CHECK(AxisCommandPort_Submit(&f, &other_seq) == AXIS_CMD_OK); RequestIrq();
+    calls = lease_calls; clock_trusted = 0U; RequestIrq(); out = Snapshot();
+    CHECK(out.active_valid == 1U && out.active.command_seq == other_seq && out.permit == 1U);
+    CHECK(lease_calls == calls);
+    /* Reject/STOP/explicit revoke/expiry each clear sidecars before a later
+     * untimed producer. This legacy API is not the CAN transaction path. */
+    for (mode = 0U; mode < 4U; ++mode)
+    {
+        Reset(); f = Frame(1U, AXIS_CMD_START, 100.0f, 1.0f, 500U);
+        CHECK(AxisCommandPort_SubmitTimed(&f, 0U, 10U, &seq) == AXIS_CMD_OK);
+        host_ipsr = 25U;
+        if (mode == 0U) (void)AxisCommandPort_BeginCycle(host_now, 0U);
+        else if (mode == 1U)
+        {
+            host_ipsr = 0U; CHECK(AxisCommandPort_Stop(&ticket) == AXIS_CMD_OK); host_ipsr = 25U;
+            (void)AxisCommandPort_BeginCycle(host_now, 1U);
+        }
+        else if (mode == 2U) AxisCommandPort_RejectActive(AXIS_CMD_NOT_READY);
+        else { clock_tick = 10U; (void)AxisCommandPort_BeginCycle(host_now, 1U); }
+        host_ipsr = 0U;
+        f = Frame(AxisCommandPort_GetEpoch(), AXIS_CMD_START, 100.0f, 1.0f, 500U);
+        CHECK(AxisCommandPort_Submit(&f, &other_seq) == AXIS_CMD_OK);
+        calls = lease_calls; clock_trusted = 0U; RequestIrq(); out = Snapshot();
+        CHECK(out.active_valid == 1U && out.active.command_seq == other_seq && out.permit == 1U);
+        CHECK(lease_calls == calls);
+    }
+}
+#endif
+
 int main(void)
 {
     TestContextsAndMask();
+    TestTimedContextAndProfile();
     TestReceiptContextsAndMask();
     TestTargetPrecheck();
 #if AXIS_COMMAND_BENCH_ENABLE
     TestRealPublicationAndSnapshot();
+    TestTimedAtomicAndRawDeadline();
+    TestTimedPublishRecheck();
+    TestTimedActiveAndPendingExpiry();
+    TestTimedFinalGateAndPause();
+    TestTimedStopAndFaultPrecedence();
+    TestTimedObserverPreventsWrapRevival();
+    TestTimedMetadataLifecycle();
     TestReceiptAppliedAndReplaced();
     TestReceiptActiveLoss();
     TestReceiptRejectedAndRetained();

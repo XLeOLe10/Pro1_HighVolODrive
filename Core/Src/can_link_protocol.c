@@ -35,7 +35,7 @@ uint8_t CanLinkProtocol_QueryOpcode(const CanLinkFrame *request)
         (request->length != 8U)) return 0U;
     if ((request->data[0] != 0x51U) || (request->data[1] != 0x01U) ||
         (request->data[2] < CAN_QUERY_INFO) ||
-        (request->data[2] > CAN_QUERY_RX_AGE_US)) return 0U;
+        (request->data[2] > CAN_QUERY_EPOCH)) return 0U;
     for (i = 4U; i < 8U; ++i)
         if (request->data[i] != 0U) return 0U;
     return request->data[2];
@@ -131,6 +131,62 @@ int CanLinkProtocol_MakeTargetCheckReply(const CanLinkFrame *request,
     result.data[1] = 0x01U;
     result.data[2] = result_code;
     for (i = 3U; i < 8U; ++i) result.data[i] = request->data[i];
+    *reply = result;
+    return 1;
+}
+
+int CanLinkProtocol_ReadTransaction(const CanLinkFrame *request,
+                                    CanLinkTransactionFrame *decoded)
+{
+    CanLinkTransactionFrame value;
+    if ((request == NULL) || (decoded == NULL)) return 0;
+    if ((request->id != CAN_LINK_REQUEST_ID) || (request->extended != 0U) ||
+        (request->remote != 0U) || (request->fd != 0U) || (request->brs != 0U) ||
+        (request->length != 8U) || (request->data[0] != 0x43U) ||
+        (request->data[1] != 0x02U) || (request->data[2] < CAN_TXN_PAGE_BEGIN) ||
+        (request->data[2] > CAN_TXN_PAGE_RESULT)) return 0;
+    value.page = request->data[2];
+    value.token = request->data[3];
+    value.value = (uint32_t)request->data[4] | ((uint32_t)request->data[5] << 8U) |
+        ((uint32_t)request->data[6] << 16U) | ((uint32_t)request->data[7] << 24U);
+    if ((value.page == CAN_TXN_PAGE_BEGIN) && (value.value == 0U)) return 0;
+    *decoded = value;
+    return 1;
+}
+
+uint32_t CanLinkProtocol_TransactionCrc32(const uint32_t words[8])
+{
+    uint32_t crc = UINT32_MAX;
+    unsigned int word, byte, bit;
+    if (words == NULL) return 0U;
+    for (word = 0U; word < 8U; word++)
+        for (byte = 0U; byte < 4U; byte++)
+        {
+            crc ^= (words[word] >> (byte * 8U)) & 0xFFU;
+            for (bit = 0U; bit < 8U; bit++)
+                crc = (crc >> 1U) ^ ((crc & 1U) != 0U ? 0xEDB88320UL : 0U);
+        }
+    return crc ^ UINT32_MAX;
+}
+
+int CanLinkProtocol_MakeTransactionReply(uint32_t request_id, uint8_t phase,
+                                        uint8_t detail, CanLinkFrame *reply)
+{
+    CanLinkFrame result = {0U, 0U, 0U, 0U, 0U, 0U, {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U}};
+    unsigned int i;
+    if ((reply == NULL) || (phase < CAN_TXN_STAGING) || (phase > CAN_TXN_UNKNOWN) ||
+        ((request_id == 0U) && (phase != CAN_TXN_UNKNOWN))) return 0;
+    if ((phase == CAN_TXN_STAGING) &&
+        ((detail < CAN_TXN_PAGE_BOOT0) || (detail > CAN_TXN_PAGE_COMMIT))) return 0;
+    if ((phase == CAN_TXN_CORE_RESULT) &&
+        ((detail == 0U) || (detail > CAN_TXN_CORE_RESULT_MAX))) return 0;
+    if ((phase == CAN_TXN_REJECTED) &&
+        ((detail < CAN_TXN_ERR_ORDER) || (detail > CAN_TXN_ERR_OPCODE))) return 0;
+    if (((phase == CAN_TXN_ACCEPTED) || (phase >= CAN_TXN_BUSY)) && (detail != 0U)) return 0;
+    result.id = CAN_LINK_REPLY_ID; result.length = 8U;
+    result.data[0] = 0x41U; result.data[1] = 0x02U;
+    result.data[2] = phase; result.data[3] = detail;
+    for (i = 0U; i < 4U; i++) result.data[4U + i] = (uint8_t)(request_id >> (i * 8U));
     *reply = result;
     return 1;
 }

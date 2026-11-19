@@ -1,26 +1,17 @@
 # 008 — CAN命令：ODrive对照与接入方案
 
-**一句话：** 008.06已接入CAN硬件接收时间戳与服务长停检测，为后续命令期限提供时间依据；仍未接CAN START/UPDATE。
+008.17 将 Bench 的速度遥测格式化与串口发送移至可抢占的空闲任务，采样任务只交接到期的成对数据。优化目标是缩短 008.16 实测的 1150.985 µs 采样后工作段。
 
-**实施状态（2026-11-18）：008.06已实现，SRC/HOST/两目标增量BUILD通过，HW PASS（有限）。** 基线`Xiao_ODrive / 30aa8d1`＋008.04–06工作区。CCFG/年龄有截图，20秒正常轮及暂停/复位状态按用户文字确认；详细证据边界见12.6。008.05内部回执/耗时仍未板验。
+**已实现。软件验证通过。008.17 禁输出板测已收尾，反馈采样时序阻塞，完整 START/UPDATE 演练未通过（2026-11-19）。** 基线 Xiao_ODrive / 0489733 加 008.16 工作区。008.17 实测见 13.13，最后一次配对记录、停止条件和收尾决定见 13.14。[原始证据](../validation/008-can-query-20261116.txt)
 
-| 部位 | 改前 → 改后 | 边界 |
-| --- | --- | --- |
-| 接收时间 | 没有帧年龄 → RxTimestamp/TSCV硬件差值 | 标称32µs/计数，年龄观察不是运行许可 |
-| 服务停顿 | 不识别多圈长停 → TOO粘滞失信、至复位不恢复 | 约200ms是服务间隔预算，不是电机失联期限 |
-| 诊断与协议 | 增加独立时间镜像、只读0A/0B；BUILD008.06 | INFO0x101FF；私有状态权威，旧健康链路诊断保留 |
-| 集成与内存 | 扩展原CAN模块/测试，新文件和任务0 | Bench实际ROM＋1084 B、静态RAM＋24 B；普通目标不变 |
+| 范围 | 验收目标 |
+| --- | --- |
+| 采样任务 | 保留每 5 ms 的速度对，移出 CSV 格式化及串口发送 |
+| 空闲任务 | 有待发速度对时尝试发送，忙、丢帧可观察，已有栈诊断继续运行 |
+| 控制与保护 | 沿用 2 ms 年龄门槛、原始命令有效期及禁输出 Bench |
+| 验证 | 主机交接测试、两目标构建、普通 HEX 对照、同条件板上演练 |
 
-| 验收层级 | 本次008.06状态 | 证据 |
-| --- | --- | --- |
-| SRC | PASS（有限） | 初始化/读清顺序、队列进展、私有状态与独立审查 |
-| 实现 | 已实现 | 时间配置/检查/出队年龄、两条只读查询 |
-| BUILD / 编译期检查 | PASS | 两目标增量0错误0警告；9×6250＋16<65536静态边界 |
-| HOST | PASS | 协议89573断言；实际服务147场景12116断言，真实HAL/CPU用桩 |
-| HW | PASS（有限） | CCFG/年龄截图＋20秒正常轮、暂停/复位状态的用户文字确认；806版本/板端指纹无独立新证据，计时精度/最坏开销未测，见12.6 |
-| 历史008.05 | 版本冒烟PASS（有限） | 用户文字确认805回包；内部处理/临界区耗时HW仍NOT_RUN |
-
-**下一步：** 1. 用户手动提交本检查点；2. 实现10.7完整事务＋发布/消费/最终许可期限；3. 在禁输出Bench联调CAN START/UPDATE。原始证据继续追加[008验证记录](../validation/008-can-query-20261116.txt)。
+008.17 SRC / HOST / BUILD 为 PASS，独立编译期断言项 N/A。HW 首段及其明细捕获有限 PASS，完整命令演练 FAIL。008.16 板上首段基线及完整三段读数见 13.12。
 
 ## 1. 参考版本与协议含义
 
@@ -714,3 +705,523 @@ HOST覆盖正常计时、单次回绕、初始化/重装HAL失败、重装前后
 **验收：** 本轮配置、低频正常观察及暂停/恢复的有限检查点可收尾。独立的008.06版本回包和板端AXF指纹未提供；记录关联当前008.06工作区与既有构建清单，不能当作板端产物身份的独立证明。硬件计时精度、约200ms阈值精确测量、满负载/最坏耗时和栈、实际失联停车与物理输出安全仍未验收；本轮尚无CAN START/UPDATE生产者。
 
 下一步按10.7接入完整事务、首帧时间贯穿Submit/BeginCycle/FinalPermit、外部请求号到内部序号的结果缓存；继续复用现有CAN/Axis模块，不按命令拆新文件。用户手动Git，不自动暂存/提交。
+
+
+## 13. 完整CAN事务与控制期限（008.07，已实现，2026-11-18）
+
+**目标与基线：** 基于已提交0489733（008.04–06）在禁功率输出Bench接入START/UPDATE整组命令，复用原CAN/Axis模块，保持普通目标无CAN运行生产者。不新增业务.c/.h、任务、IRQ、DMA或存储配置。本轮固件实现和软件验证已完成，008.07已有下述有限板测；旧检查点证据不自动支持新镜像或未测路径。
+
+**交接规则：** appTask单写组装槽，收到完整且一致的身份/运行代次/参数后，经短PRIMASK把命令及对应时间元数据一次交给TIM1。TIM1先核旧active和pending时限，消费后在最终许可处再核一次；硬件时间失信或到期先禁输出再撤销。volatile只用于必要的跨上下文标量可见性，不替代完整交接。
+
+| 事务页 | 标准321、8字节：43 02 page token payload32LE |
+| --- | --- |
+| 30 | BEGIN，非0单调外部请求号 |
+| 31–34 | 同次启动的完整boot_id四字 |
+| 35 | run_epoch运行代次 |
+| 36 | speed_i16（rpm）＋iq_limit_u16（mA） |
+| 37 | opcode_u8（1 START/2 UPDATE）＋保留0＋TTL_u16（ms） |
+| 38 | COMMIT，前8页payload共32字节的CRC32；IEEE反射CRC32（EDB88320，初/终异或FFFFFFFF），金向量见13.1 |
+| 39 | 只读结果查询，payload为外部请求号 |
+
+- 原321/322、Classic500k、8字节不变；自定义协议非ODrive CANSimple。事务响应41 02 phase detail request_id32，phase=1组装/2入pending/3核心处理完成/4协议拒绝/5忙/6旧号/7未知，detail随phase解释。
+- 顺序组装；同页同内容重发不推进、不续期；异内容/错序拒绝；独立token不拼单。完整boot比较，CRC只做误混检错，不是鉴权。
+- 最多一进行中槽（组装或等待核心结果）加一最近完成缓存。接受BEGIN即推进请求号高水位，已失败/过期ID不能重开；缓存淘汰后旧号返回旧号。新事务终结前保留上一完成结果；重复请求/查询不再次Submit。
+- 期限来自BEGIN的原始硬件SOF，未收到TTL页前按1000ms上限，之后按实际TTL缩短。Bench仅1..1000ms，换算floor(ms*1000/32)计数；边界等于到期即拒绝。每次Poll维护期限，不能让未完成组包跨计数圈后变新。
+- AxisCommandFrame/Core/Snapshot布局保持；pending/active各用带command_seq的私有时间元数据，成功发布时同锁绑定，TIM1消费/撤销时迁移/清除。原HAL窗口只保留core兼容的辅助上限，原始硬件锚点始终约束真实期限，不能因发布/重试重新起算。
+- 有限只读CanLink_LeaseValid供task/ISR使用，不喂狗、不调用阻塞HAL、不修改task私有时间状态；配置、TOO、接收丢失及致命错误均失效。TIM1独立于appTask推进，不靠task先发现超时；暂停整个CPU期间软件不能执行关断。
+- 旧active到期优先于新UPDATE；pending独立到期也保守撤销active+pending。FAULT/STOP已有原因优先。GetReceipt缓存指定内部seq的处理结果；APPLIED只表示核心安装，不代表当前仍运行或物理输出。
+- 查询run_epoch供工具组包；STOP/故障/代次变化/时间失信使旧组包失效，不自动重启。原STOP票据来源仍只由显式STOP产生，时间撤销不悄悄增加STOP来源。
+
+**计划验收：** HOST覆盖顺序/CRC/身份/代次、缺片交错、重复与高水位、到期同拍UPDATE、发布前后/最终许可失信、STOP取消pending、TX满后的结果重读。两目标Keil增量Build及map，核对RAM/Flash/静态栈变化。新增一个离线可验证的PCAN批量发送辅助工具（非业务模块），只由用户明确运行才访问适配器；默认不自动重试START、不自动重复续期。板测分轮最多3–4项Watch，保持功率母线断开，步骤在构建完成后固定。
+
+**当前状态：** 已实现；SRC/HOST/BUILD PASS（范围见下），HW部分通过；UPDATE已执行并因NOT_READY失败，修复见13.4；STOP打断及异常事务仍NOT_RUN。
+
+- 复核补强：后台每轮在CanLink_Poll前调用AxisCommandPort_ObserveTime，以短PRIMASK检查pending/active的原始硬件期限；任务单写“已失效内部seq上限”，TIM1只读且从不恢复旧seq。即使TIM1长期不进入而task仍运行，也会在16位计数绕回前锁住过期命令；task本身长停由不清除的TOO覆盖。此观察不改Core、不直接写输出，最终撤许可仍由TIM1负责。
+- CAN错误处理先发布私有时间失信，再W1C清接收丢失/致命错误标志，防止TIM1在清旗与发布之间抢占而漏看故障。
+
+
+### 13.1 最终接口与结果语义
+
+- BUILD=0x00000807，INFO=0x000103FF；新增只读EPOCH查询：51 01 0C token 00 00 00 00，回复52 01 0C token epoch32LE。原PING/STOP/查询/预检保留。
+- CanLink_Init内部复制CanLinkProviders（6个必要回调）；app_runtime的SubmitCanCommand只将rpm/mA转换为core单位，并调用SubmitTimed(frame, begin_timestamp, floor(ttl_ms*1000/32), seq)。CAN不写PWM/EN、不清故障。
+- phase3表示端口或核心的处理结果，detail沿用AXIS_CMD_*；0E=APPLIED。phase4/detail01顺序、02冲突、03boot、04epoch、05CRC、06期限、07时间失信、08STOP、09故障、0A内部合同异常、0B操作/保留字段错误。INTERNAL可能发生在受理之后，表示执行结果无法确认，不保证“从未安装”；此时同时锁时间失信。
+- phase1的detail为下一页，phase2/5/6/7的detail为0。进行中组包token固定，同号换token不重开；旧数据页不可在新token复用后当可靠结果查询，历史结果应使用39显式ID，39无需旧token。同号异内容不改已经缓存的结果。
+- 完整8页在首COMMIT前已因FAULT/epoch/期限结束时，正确CRC只重读原终态，错误CRC返回CONFLICT；都不重新Submit。BUSY或BEGIN前置拒绝不推进请求高水位，受理后失败的请求号不能重开。
+- CRC金向量：八个32位字[1,1,2,3,4,1,0x01F40064,0x03E80001]按小端串行，结果0x80B3BFF2；独立Python crc32与生产C验证一致。它只用于误混检错，不是认证。
+- LeaseValid本身只是16位时刻的有界观察；防多圈复活必须同时保留每轮ObserveTime、TOO不清、8槽单消费者进展与原始期限合同。任意更改任务调用、FIFO大小、预算或硬件时钟须重新审查。
+
+### 13.2 实际验证与资源
+
+| 验证 | 本轮结果 |
+| --- | --- |
+| CAN协议/服务 | 135945断言；215场景26631断言（新增68场景），包括完整组包、重放、缓存、坏provider、TX满和清旗抢占 |
+| 命令/FOC | core13场景612断言；FOC407断言 |
+| 端口/安全 | 普通84、Bench636、历史演练139、安全102断言；9个配置用例 |
+| 启动身份 | 实际runtime代码块3576断言与启动顺序检查 |
+| PCAN辅助工具（HOST） | 原ABI/CRC/范围/过滤/无重试/拒绝停止/复位检查通过；新增11个START→UPDATE离线情景通过：正常两笔、任一ID已知时0写、START失败/迟到不发UPDATE、UPDATE受旧期限限制、boot/epoch拒绝、状态检查期间复位、epoch未变化或CAN时间失信不得PASS。正常路径检查两条Final APPLIED、START/UPDATE demo PASS及到期后Retained UPDATE APPLIED；仅HOST，实机下一轮NOT_RUN |
+| Keil | ARMCC5.06u7/960，Bench增量15秒、普通目标12秒，均0错误0警告；最终源与产物指纹见validation |
+
+HOST仍使用旧Cygwin工具，FAST_CWD环境警告保留，不把Keil零警告扩写为整个测试环境零警告。HAL/寄存器/调度由桩模拟；软件测试不能证明实际IRQ耗时和物理输出。
+
+两目标map：普通ROM61556 B、RW+ZI25776 B不变；Bench实际ROM69968 B、RW+ZI26136 B，较008.06增加3548/168 B。Bench未压缩Program Size之Code/RO/RW=68924/928/920 B；map压缩RW加载116 B，故以map实际ROM69968 B记预算。均内部128 KiB Flash，DTCM用0 B，静态数据在AXI0x24000000；未改链接/外Flash。事务两个槽各64 B、pending/active时间元数据各12 B、失效seq4 B。heap16384 B、MSP4096 B、appTask4096 B从heap分配，保持不变。
+
+编译期函数自身栈帧：CanLink_Poll168 B、CommitTransaction96 B、RefreshTransaction48 B、SubmitTimed80 B、ObserveTime16 B、LeaseValid16 B；不含完整间接调用/IRQ嵌套，运行最坏栈及临界区时长仍待测。本轮唯一新增文件tests/pcan_command_bench.py；修改原7个业务文件、5个HOST文件及原4份文档。助手未修改IOC/工程文件/uvoptx，不自动Git；当前uvoptx含用户调试设置变更，保留并单独判断是否暂存，不声称工作区该文件无变更。
+
+### 13.3 008.07历史板测步骤（部分PASS，UPDATE失败）
+
+本节保留008.07原测试步骤；008.08必须按13.4下载新镜像后复测。原步骤保持功率母线断开、仅控制与传感器供电，使用FOC_T_CommandBench 008.07；当时只扩展电脑脚本，未改变固件。旧自动axis_bench_stage已停用，本轮不用它判定。
+
+**已完成的有限观察：** 用户先执行`--inspect`，截图显示BUILD008.07、完整boot四字、epoch1和status；首笔`--send --bench-no-power --request-id 1`截图显示ACCEPTED→CORE_RESULT/APPLIED，随后同次脚本运行的到期观察显示epoch2、fault0及关闭许可/输出的status，脚本打印`Bench single-command expiry observation PASS`。只据此记录接口、首单处理和软件到期观察PASS（有限）；没有三项Watch截图、物理EN/MOE测量或带输出测试。
+
+首次`--result 1`得到UNKNOWN时boot已经改变，用户明确说明断电重启；RAM历史不跨复位保存，不能把这一结果当成原启动回执丢失。随后最新截图在另一boot下返回ID1的CORE_RESULT/APPLIED，说明该次启动存在可读历史；该boot的发送截图及三项Watch未提供，不能把三个boot拼成同一轮连续证据。完整原始字段与证据限制追加在[008验证记录](../validation/008-can-query-20261116.txt)。
+
+接口检查和历史重读命令保留：
+
+    python tests/pcan_command_bench.py --inspect
+    python tests/pcan_command_bench.py --result 1
+
+`--result`只读，不Submit或续期。每次都对照完整boot；同次启动的普通请求ID单调增加，复位后RAM历史和高水位重新开始。不能靠反复重启替代重复请求或到期验收。APPLIED仅表示核心曾安装，不表示当前许可、FOC使用或电机运动。
+
+**008.07原演练：同次启动START→UPDATE（已执行但失败，诊断见13.4）**
+
+关闭PCAN-View，避免适配器被多个程序同时使用。在工程根目录终端执行：
+
+    python tests/pcan_command_bench.py --demo-update --bench-no-power --request-id 2
+
+本模式固定两笔合成Bench命令：ID2 START（100 rpm、500 mA、TTL1000 ms）成功后，在旧期限内立即发送ID3 UPDATE（200 rpm、750 mA、TTL1000 ms）；同一进程保持完整boot/epoch关联，末尾等待到期，确认完整boot未变、CAN时间仍可信，再重读ID3；这是到期后的软件状态观察，不测量精确到期延迟。它不会自动重试或在到期后补发START恢复运行。若ID2/ID3已使用、旧号或出现拒绝/超时，应停止并保留输出，不能重复这条命令期待产生新执行；先核当前boot与已有结果再决定下一测试ID。
+
+只保留这三项Watch，并先记下applied_seq起值：
+
+| Watch | 本轮应观察到的结果 |
+| --- | --- |
+| axis_command_applied_seq | 两笔都APPLIED后，相对起值增加2；不能仅凭最后绝对值断定两笔均成功 |
+| axis_command_permit | 最终到期后回0；中途许可观察不等于功率许可 |
+| board_output_enabled | 整轮保持0 |
+
+提交证据应包括同次boot的START和UPDATE回执、末尾到期/ID3重读输出，以及三项Watch观察；不能将软件status当作物理关断证明。若工具失败，保留报错原文，不通过改Watch绕过。后续STOP打断、缺片/错误身份、时间失信等继续分轮进行，本页未列通过的板测均NOT_RUN。
+
+本次`--demo-update`是现有电脑工具的增量；其新增离线验证结果见13.2，该模式已在008.07执行并因NOT_READY失败，008.08修复尚待复测。工具使用已安装的[PCAN-Basic接口](https://www.peak-system.com/support/software-information/development-kits/pcan-basic/)，原工具已获本次有限实机收发证据，仍不宣称商家适配器全部API或满负载兼容。只有显式`--inspect`/`--send`/`--demo-update`/`--result`/`--stop`才初始化通道；`--self-test`纯离线，`--check-driver`只加载符号。助手未执行任何live模式。
+
+
+### 13.4 008.08 有效命令期间的快速检查开销（2026-11-18）
+
+**问题与证据：** 用户在同一次启动看到START ID2 APPLIED（电脑侧47 ms），随后UPDATE ID3在page35返回EPOCH04（本批16 ms，旧租期余937 ms）。失败后读取boot未变、epoch从1到2、fault0、time_state1；Watch的axis_command_result=0x0C（NOT_READY）、applied_seq/permit/output为1/0/0。这不是已完成的UPDATE验收。
+
+本次已有诊断：采样gap=1、SPI错误=0、任务deadline miss=1且随后稳定；冻结previous_total_us=2300、between_tasks_us=700、sample_interval_us=2999、previous_acquisition_us=203。foc_isr_max_cycles=10123、overrun_count=2。按本工程200 MHz与源码预算9996周期，测得最大约50.615 us，超过当前49.98 us预算；测量范围是FastISR主体，不含完整中断入口/退出。冻结记录不是与命令序号绑定的轨迹，但与本次反馈/调度失效吻合，不能据此宣称每一微秒都已定位。
+
+**定位依据：** AD2S采样间隔超过2 ms会发布speed_valid=0；AppRuntime_FastISR的一拍feedback_ok=0可使AxisCommand_Tick撤销NOT_READY并推进epoch。恢复反馈不恢复旧命令；旧APPLIED是历史处理结果。采样自身203 us，不等于任务总耗时2300 us。有效timed active才增加的硬件检查是本轮优化对象；尚未测得各子函数的板上占比。
+
+**最小修复合同：**
+
+- 保持20 kHz链、2 ms反馈预算、1000 ms命令上限、原始BEGIN SOF、ObserveTime过期标记、BeginCycle与FinalPermit两道守卫不变。
+- 每次CanLink_LeaseValid仍现读一次固定配置：NBTP/TSCC/TOCC/IE/ILE、CCFG、时钟源、调试冻结。不是初始化后缓存，也不把配置检查移到低频任务。
+- 对可能变化的private time_state、CCCR完整禁止位、HSERDY、IR的TOO/RF0L/MRAF/WDI/BO、TOCV，在TSCV读取前后均复核。失败仍立即拒绝，不清故障、不重装计时器。
+- 本仓库固定配置的合法写者只有启动初始化，运行时只有TOCV重装和IR清旗；任务不能插入TIM1。无合法并发重配置是这次去重的前提，未来加入在线重配/新写者必须重审。异常NMI/Fatal不返回；调试器改控制配置不构成支持的运行方式。
+- Task的CheckTime/Init仍做完整配置及HAL时钟频率审计。稳定active路径的源码读取数预计由约50次/拍降至34次/拍；这不是实际节省时间或验收结果。
+- 新固件BUILD008.08用于区别修改前镜像；协议字段和电脑演练命令不变。仅改原CAN模块/版本常量、现有测试与辅助脚本，不增业务文件/任务/IRQ/DMA。
+
+寄存器属性参考[ST RM0433（Rev6）](https://community.st.com/ysqtg83639/attachments/ysqtg83639/stm32-mcu-products-forum/58237/1/RM0433.pdf)的FDCAN配置/控制寄存器章节；NBTP及TOCC等含受INIT/CCE限制的写字段。安全依据还包括本仓库合法写者审查，不能只凭寄存器名称把所有位当成常量。
+
+**计划验收：** 直接LeaseValid测试固定配置错误和所有动态失效，保留原始期限/绕回/W1C/STOP/FAULT回归；补START成功→ready短暂失效→旧epoch UPDATE拒绝且不会复活的实际core组合。两个Keil目标仅增量Build，核map和源/产物指纹。用户下载新Bench后按相同脚本复测；确认两笔APPLIED及采样gap/任务超期/ISR超期不再增加，仍禁输出。固件优化的实际收益和板测结果尚未验证，不因为HOST通过关闭问题。
+
+**008.08最终复测状态：** SRC/HOST/两目标增量BUILD PASS；HW FAIL（完整START→UPDATE）。新现场见13.5，尚未解决NOT_READY撤销。
+
+| 008.08验证/资源 | 结果 |
+| --- | --- |
+| 协议/服务HOST | 135945断言；216场景/27154断言，含直接配置/动态错误和NOT_READY组合 |
+| Port/安全HOST | 普通84、Bench636、旧演练139、安全102断言及9配置通过 |
+| 电脑工具 | 12离线场景通过，BUILD门槛同步为008.08，保留失败页/耗时/只读诊断 |
+| Keil增量 | Bench16秒、普通2秒，均0错误0警告；只读反汇编保留两次动态守卫 |
+| 内存 | Bench ROM70008 B（+40）、RAM26136 B不变；普通61556/25776 B不变；链接/堆栈预算不变 |
+| HW | FAIL；完整演练再次NOT_READY/epoch失效，见13.5，不等同于本轮也发生采样gap |
+
+**下一轮操作：** 使用已构建的FOC_T_CommandBench 008.08镜像，用户退出旧调试、Download、重新Run；无需Rebuild All或CubeMX。保持母线断开，只给控制/传感器供电，关闭PCAN-View，执行一次：
+
+    python tests/pcan_command_bench.py --demo-update --bench-no-power --request-id 2
+
+脚本自动核新BUILD与boot；预期两笔APPLIED、最终START/UPDATE demo PASS。Watch本轮只看ad2s_sample_gap_count、app_task_deadline_misses、foc_isr_overrun_count，记执行前后，预期无新增（理想均0）。失败时保留完整终端诊断和这三项，不再次发命令或复位；后续再按需取ISR最大周期。软件status/编译禁输出不代替物理输出验收。测试与本地源/产物指纹已追加原validation。
+
+### 13.5 008.09 首次运行条件撤销现场（2026-11-18，已实现/待板测）
+
+**新证据：** 008.08仍在START ID2 APPLIED后、UPDATE ID3 page35出现EPOCH04。同boot 634FFDE4 8833FA68 C04AF594 6235E3B8，epoch1→2，fault0/time_state1。用户只读报告axis_command_result=0C、foc_isr_max_cycles=0x259D（9629周期，200 MHz下48.145 us）、app_gap_trace.previous_total_us=FFFFFFFF。后者表示未捕获，不能解释为实际耗时或所有反馈均有效；008.08完整演练FAIL，尚不能关闭问题。
+
+相邻SAMPLE边沿间隔与控制端已发布快照的年龄是两个量：新一帧边沿及时，但SPI/计算/发布仍未完成时，TIM1可能还在使用上一完整帧。仅凭现有数据不能确定此次是哪一项ready输入失效。48.145 us只覆盖FastISR主体，不含HAL/中断入口退出，不能据此宣称完整IRQ或后台时序已合格。
+
+**实施范围：** 在原app_runtime.c/.h添加Bench-only、TIM1单写、首次锁存的app_ready_loss_trace；记录曾有许可的命令因NOT_READY撤销时的原因位、同帧DWT/HAL年龄、采样/命令序号、epoch及后台阶段和少量累计计数。直接复用当拍输入；冻结在撤许可后，不重复采样，不加HAL/SPI/等待/分配或新的关中断区，captured最后发布。阶段是单字诊断标记，不是精确PC或SPI进展证明：0未标记尾部/等待、1采集及其后置gap观察、2ObserveTime/CAN、3遥测、4堆诊断。记录不参与控制；不改变2 ms门槛、租期、ready判断和输出保护。正常目标不启用记录。BUILD008.09区别诊断镜像，电脑工具同步核版本。
+
+**验收计划：** 复用已有HOST入口测试实际生产诊断代码：启动无许可不捕获、正常ready不捕获、非NOT_READY及epoch未变不捕获、精确2 ms/超界/绕回、多原因、一次锁存和只读数据。特别覆盖无SAMPLE gap但上一帧年龄超限的窗口。两目标增量Build并核资源；独立复核触发/发布/普通目标排除。板测继续一次禁输出演练，只读captured/reason_bits/age_cycles；这是定位版，不能把记录成功当成START/UPDATE通过。
+
+**实际实现与验收：** 在BeginCycle前保存前拍许可/epoch和用于本拍ready的current/lockout/fault输入；最终FinalPermit已发布结果且输出处理完成后，只有前拍permit非零、ready为零、最终NOT_READY、epoch已改变且未捕获才冻结。使用原snapshot/now值，不再读反馈；TIM1单写，DMB后captured=1，此后不改。累计计数仅作同刻观察，不当作因果证明。新增48 B记录及4 B阶段标记（链接RAM增56 B含布局填充）。正常拍仍有少量标量保存/分支开销，失败拍冻结成本计入foc_isr测量；本版不是无扰动探针，更不是性能修复。
+
+| 008.09验收 | 结果与限制 |
+| --- | --- |
+| SRC | 独立审查PASS；原控制条件保持、最终撤销后冻结、普通目标条件编译排除 |
+| HOST | 诊断生产函数提取片段175断言，启动身份3576/启动顺序、协议135945和工具12离线场景通过；不执行完整FastISR或模拟真实抢占耗时 |
+| BUILD | ARMCC5.06u7/960，两目标增量0错误0警告；Bench27秒、普通24秒 |
+| 资源 | Bench实际ROM70476 B、RW+ZI26192 B（相对008.08 +468/+56）；普通61556/25776 B不变；内部128 KiB Flash/DTCM0/AXI RAM，堆16384、MSP4096、appTask4096从堆分配不变 |
+| HW | FAIL（完整演练）：ADC_FRAME=0x200；NOT_READY专用冻结记录未触发，详见13.6。完整IRQ、采样同帧及旧NOT_READY根因仍未验证 |
+
+reason_bits位表：01位置无效、02速度无效、04DWT年龄超过2ms、08HAL年龄超过2ms、10电流标定未就绪、20测试锁定、40板故障；允许组合。具体撤销优先级仍由core控制，部分组合在真实NOT_READY路径通常不会出现。age_cycles是原始CPU周期，当前200 MHz下400000（0x61A80）为2ms；精确等于门槛仍有效。若captured=0，其余字段不代表一次有效现场。
+
+**下一轮（仅禁输出，一次）：**
+1. Keil选择FOC_T_CommandBench，退出旧调试后Download新008.09，再进入Run。已增量构建，无需Rebuild All/CubeMX。保持功率母线断开，仅控制/传感器供电，关闭PCAN-View。
+2. 新启动下在终端执行一次：
+
+       python tests/pcan_command_bench.py --demo-update --bench-no-power --request-id 2
+
+3. 保留完整终端输出，只读app_ready_loss_trace.captured、app_ready_loss_trace.reason_bits、app_ready_loss_trace.age_cycles。发生失败后保持Run，不复位、不重发；记录会保留首次现场，不需要追踪瞬间变化。不要手改记录或ready值绕过保护。
+4. captured=1表示抓到真实运行条件撤销，不能据此判PASS；captured=0也不能独自判PASS，需看两笔回执/终端结果。若仍是无回包或其它拒绝，保留原文，不再次START。所有测试仍不证明物理停机或带输出安全。
+
+本轮修改已有3个固件文件、3个测试/工具文件及原4份文档，新增文件0。此前尚未提交的辅助脚本继续保留其未跟踪状态；用户uvoptx设置未由助手改写。未自动暂存/提交、下载或操作板端。
+
+### 13.6 008.10 CAN单文件优化对比（2026-11-18，已板测FAIL）
+
+**008.09新现场：** 用户截图显示START ID2 APPLIED（62ms），UPDATE ID3在BEGIN页30返回FAULT09；同boot 33FE4DC5 29F86000 D59C3E0A 1EF383AE，epoch1→2，status05811905，fault00000200，time_state1、rx_age1024。app_ready_loss_trace三项均0；该记录只针对NOT_READY，不捕获ADC_FRAME。后续用户只读app_adc_missed_count=1、foc_isr_max_cycles=25F9（9721周期，48.605us）、overrun_count=0，未明确提供后续增长情况。此次完整演练FAIL，NOT_READY记录分支仍未实机验收。用户询问后已告知可断电；没有继续要求保存带电现场。
+
+**确定与未确定：** board_safety.h的200是ADC_FRAME；FastISR在已有许可时发现CurrentMonitor没有推进sample_sequence而锁故障，不是过流数值判定。CurrentSense要求三ADC的JEOS齐全，无其它运行期软件清标志写者；现有检查/清旗/四JDR读取不能证明物理同帧。命令守卫后的ADC消费位置随执行路径变化，或IRQ延迟后的连续服务，均可能产生一次缺帧，但本次没有CNT/JEOS相位证据，不能定为唯一根因。不能直接前移整个CurrentMonitor：前面的SetRotorFeedback/Ramp会更新foc_theta。
+
+**唯一性能变量：** 对当前目标文件运行fromelf --text -v证实实际ARMCC命令为-O0（包括CAN和控制模块）。仅FOC_T_CommandBench的can_link.c设文件级-O1，普通目标及其它文件保持-O0；不改CAN源码逻辑、MMIO守卫次数/顺序、HAL/RTOS、采样顺序、时钟、cache、租期或保护阈值。BUILD008.10用于区分该实验镜像，电脑工具同步核版本。属于性能对比，不预先承诺解决ADC相位缺陷。文件级优化可能影响该文件局部变量的单步/Watch可见性，已有volatile全局诊断保留。
+
+**验收计划：** 原CAN协议/服务回归与工具离线检查；两目标增量Build，fromelf核can_link.o仅Bench为-O1、其它关键对象/普通CAN仍-O0；反汇编核LeaseValid的固定配置与动态前后检查、volatile实际读取以及BeginCycle/FinalPermit两处调用，必要时检查W1C fence。核map/指纹/普通HEX不变。板测只执行一次原演练，对比缺帧计数、FastISR最大周期、超时计数及两笔回执；完整IRQ入口/退出及硬件同帧仍为未验证边界。助手不下载或操作硬件。
+
+**实际变化与验证：**
+- 只在原uvprojx的CommandBench/can_link.c添加文件级选项；目标级、文件列表、宏及普通目标配置不变。实际对象Input Comments证实该文件-O1，Bench runtime及普通CAN为-O0；未靠XML数字猜测生效。can_link.c及ADC/控制源码未改。
+- 生产BUILD与原电脑脚本同步008.10（0x00000810）；原协议和服务夹具同步回包版本。修改已有1个固件头、1个Keil工程、3个测试/工具及原4份文档，新增文件0。
+- HOST协议135945、服务216场景/27154、工具12离线场景通过。服务夹具中旧BUILD808期望已同步为810，原行为回归通过；原runner不加-O，属于GCC4.5.3默认O0功能回归，环境FAST_CWD警告保留。
+- Keil两目标增量均0错误0警告（Bench16秒、普通2秒）。普通HEX与008.09逐字节一致；Bench实际ROM70004 B（-472）、RW+ZI26192 B不变；普通61556/25776 B。Flash128 KiB、DTCM0、AXI RAM和heap/MSP/appTask预算不变。
+- 机器码独立复核PASS：LeaseValid两次动态调用夹一次固定检查与真实TSCV读取，动态private state/CCCR/HSERDY/IR/TOCV未复用；BeginCycle/FinalPermit两道守卫仍在；PollErrors先写私有失信状态再清IR W1C。实际ARMCC产物验证的是这些路径/顺序，不是完整优化语义形式证明或最坏时序证明。
+- 008.10复测HW FAIL（ADC_FRAME，详见13.7）。009本次缺帧并未触发冷冻结复制，但正常诊断标量仍有成本；本版不删除该诊断，也不改变其它性能变量。O1可能让can_link局部变量在单步时不可见或与源码顺序不同，已有volatile Watch镜像保留。后续CubeMX重生成工程须复核该文件级选项，不能只看版本号。
+
+**008.10历史操作（已完成；当前步骤见13.7）：** 保持禁输出Bench、功率母线断开；用户在Keil重新打开/重载已修改的uvprojx，避免旧工程设置覆盖文件级优化，选择FOC_T_CommandBench。本地008.10已构建，直接Download并Run，无需Rebuild All；若用户再Build，can_link实际命令应为-O1。关闭PCAN-View，在新启动下只执行一次：
+
+    python tests/pcan_command_bench.py --demo-update --bench-no-power --request-id 2
+
+只看app_adc_missed_count、foc_isr_max_cycles、foc_isr_overrun_count，保留执行前后值和完整终端。预期两笔APPLIED、末尾demo PASS，缺帧/主体超时不新增，最大周期明显降低才支持这次优化有实测收益。即使通过也不补写ADC物理同帧、完整IRQ、带输出或长期稳定性已验收；若失败，保留原文和三项，不继续重试/清故障。先前已用ID不能在同boot重复提交。
+
+### 13.7 008.11 ADC首次故障相位记录（2026-11-18，已板测/演练FAIL）
+
+**008.10复测：** 用户截图START ID2 APPLIED（47ms），UPDATE ID3在BEGIN30返回FAULT09（16ms，旧期限余937ms）。同boot EEA4078E 41C858C4 44B855CB FD2C9373，epoch1→2，status05811905/fault200/time_state1/rx_age320。用户按上一轮顺序报告ADC缺帧1、FastISR最大24F3（9459周期，47.295us）、主体超时0；缺少执行前读数，不能由总数1推出精确增量。完整演练FAIL。观察最大值比009少262周期/1.31us，但每次工作负载/首次事件不同，不是严格WCET或单路径节省证明，单文件优化未消除缺帧。
+
+**计划只抓现场：** 保留can_link O1，不改采样/计算顺序、时钟、阈值/检查次数，不再扩大优化。原current_sense.c/.h在Bench下保留ADC1→2→3的短路检查顺序，保存首次失败处真实读取的ISR值（未检查ADC为未知）；成功仍3读3清，失败仍1/2/3读、不清旗/不读JDR。用DWT记录相邻检查及距上次成功检查的间隔，区分首次无历史；这些不是物理采样间隔。失败分支冷读DIR→CNT→DIR，方向改变则相位标未知；记录的是判定之后的顺序读数，非原子时刻。
+
+FastISR沿原ADC_FRAME路径先LatchFault/RejectActive/输出处理，再显式冻结原驱动记录一次；上电无许可的缺帧、已有故障不占用唯一运行故障记录。复用FastISR.started及前次主体入口/主体耗时作为旁证，不冒称真实IRQ入口/完整IRQ耗时。TIM1是唯一运行写者/读者，完整冻结DMB后发布captured；Watch只读，记录不参与控制。成功路径有少量DWT/历史标量成本，故障拍含记录成本，不能把它当无扰动探针。普通目标不启用诊断。BUILD008.11区分镜像，原工具同步版本。
+
+**计划验收：** 在已有HOST入口测试实际生产片段：ADC1/2/3分别只读1/2/3次、失败无W1C/JDR、成功原清旗顺序、DWT回绕/首次历史、相位跨方向显式不确定、首次冻结/后续不改、runtime仅在原active ADC故障门之后调用。两目标增量构建/普通HEX对照、内存/源及配置指纹核对。板测一次原演练，只读captured、first_missing_adc、check_interval_cycles、tim_phase四项；其它同次现场字段备查，不要求一轮全加。没有实际相位数据前不认定ADC停触发、跨帧或IRQ迟到根因。
+
+**已实现细节与边界：** 原current_sense.h定义11字/44 B的CurrentSenseFaultTrace，符号current_sense_fault_trace；驱动私有scratch28 B＋4字历史16 B，runtime两字主体历史8 B，总RAM增加96 B。每次新检查先使旧scratch失效，失败只记录实际检查到的首缺ADC（1/2/3）及当次ISR值，不把未检查的通道判成失败。成功保留原三次W1C及随后GetRaw顺序。暂存发生在失败判定之后、原故障门之前；完整Watch记录在LatchFault/RejectActive/ApplyNULL之后，以DMB→captured=1发布。诊断不参与许可，普通目标代码排除。
+
+检查间隔与距上次成功检查间隔在驱动保存；runtime传入当前/上次FastISR主体开始和上拍主体耗时，不新增硬件IRQ入口测量。tim_phase低16位为冷读CNT，bit16为后一次DIR，bit31表示DIR前后不一致；0不表示“无相位”，有效性先看captured。tim_sr为更晚的独立读数。phase和DWT并非一个原子时刻，不能据单张记录认定同一转换帧。两次主体/检查历史缺失用UINT32_MAX，valid位避免把合法DWT=0误当无历史；DWT长时间多圈和暂停现场不作为精确时序证据。
+
+| 008.11验证/资源 | 结果 |
+| --- | --- |
+| SRC | 独立审查PASS，正常路径新增少量DWT/历史标量成本，失败拍包括暂存/冻结成本 |
+| HOST | 实际ADC片段232，原启动3576/ready175；协议135945/服务216场景27154/工具12通过；runtime冻结调用位置为源码顺序检查，不是完整IRQ模拟 |
+| BUILD | ARMCC5.06u7/960，Bench22秒、普通20秒增量0错误0警告。最终current_sense源早于本轮对象构建，源指纹复核一致 |
+| 内存 | Bench ROM70436 B（+432）、RW+ZI26288 B（+96）；普通61556/25776 B且HEX逐字节相同；heap16384、MSP4096、appTask4096从堆分配不变 |
+| HW | 诊断捕获有限PASS，完整演练FAIL；不同启动的ADC与NOT_READY现场见13.8，不拼接成同次记录 |
+
+本轮修改已有4个固件文件（current_sense.c/.h、app_runtime.c、原版本头）、4个测试/工具与原4份文档，新增文件0；没有改Keil工程、IOC、ADC时钟、触发相位、RTOS或其它优化等级。继续保持仅Bench can_link.c为-O1。未自动Git、下载或操作硬件。
+
+**008.11历史操作（已执行；当前步骤见13.8）：**
+1. 仍保持功率母线断开、仅控制/传感器供电，选择FOC_T_CommandBench。退出旧Debug，下载已构建008.11，重新进入调试、复位一次并Run；连续运行约3秒，不打断点或单步，无需Rebuild All/CubeMX。
+2. 关闭PCAN-View，在新启动只执行一次：
+
+       python tests/pcan_command_bench.py --demo-update --bench-no-power --request-id 2
+
+3. 发完整终端输出和以下四项原始值：current_sense_fault_trace.captured、.first_missing_adc、.check_interval_cycles、.tim_phase。预期若再次active ADC_FRAME则captured=1并保留首缺ADC，后续不再覆盖；无需实时追踪。0表示未捕获，不等于演练通过。
+4. 错误后不重复START、不清故障；先保存这次结果。若错误类型改变或四项为0，原样报告，不自行改Watch以满足预期。记录的开销会影响故障拍/少量正常路径，先据其定位再另做修复和时序复测。
+
+### 13.8 008.12 后台超期后的有界补跑（2026-11-18，已板测FAIL）
+
+**008.11板测证据：** 第一轮同boot A7B81CFE B7903455 5C40315F CB646853，START2 APPLIED后UPDATE3 BEGIN30返回FAULT09、epoch1→2、fault200。ADC冻结captured1/first_missing_adc1/check_interval2575/tim_phase07AF；按200MHz为47.945us检查间隔，失败后CNT1967/up，无方向变化标志；不能反推原检查瞬间或物理采样帧。随后用户曾复位/断电/重进调试之一，后续全0不与旧现场拼接。第二轮boot D8AA2C2E 657F7456 1883DB22 01C1F09B，START2 APPLIED47ms；UPDATE3 page35拒绝EPOCH04，epoch2、fault0/time1/rx_age736。ready冻结result0C/captured1/reason4/age621E7=401895cycles=2009.475us，直接支持NOT_READY仅DWT年龄超限；冻结phase/gap/deadline用户回复001，按原提问顺序解释0/0/1。完整演练两轮均FAIL；两种现场分属不同启动，不宣称同一根因。诊断分支获有限板测证据，尚未关闭ADC/完整时序问题。
+
+**源码依据与假设：** StartAppTask在工作结束时发现deadline已到，原APP_NEXT_WAKE仍将下次唤醒置now+1并阻塞；这会在已超期后继续增加等待。phase0包括等待/尾部而非精确PC；deadline1是累计快照，不证明本次唯一原因。AD2S采样边沿后SPI、换算和发布都可被TIM1抢占；gap0不等于旧快照在下一份发布前不会超龄。此次只消除一种可识别的额外等待，实际收益需要板测。
+
+**单一修改范围：** 仅FOC_T_CommandBench的freertos.c调度路径。第一次超期最多允许立即执行下一轮BackgroundStep，重新以now+1设置下一期限；连续超期则必须真实阻塞，不能忙循环或只用yield。osDelayUntil检查与调用之间tick越过的参数错误走同一补跑资格，资格只在成功阻塞后恢复；其它RTOS错误仍Fatal。不追赶历史采样/不重复旧CAN命令，补跑仍正常采集新快照、顺序服务一次有界后台；物理采样间隔会有变化，真实差分仍按原SAMPLE时间计算。普通目标原调度保持不变。
+
+**保持边界：** 2ms年龄门槛、SAMPLE时间戳/快照发布、TIM1优先级、ADC触发和计算顺序、20kHz控制、CAN租期/身份/epoch与输出保护不改；仅保留既有Bench can_link.c O1，Guard纯软件简化候选本轮不实施。无新任务、业务源/头文件、DMA或外Flash。不把一次赶上期限当作系统最坏时序合格。
+
+**验收：** 原runtime HOST扩展实际生产调度函数/循环，覆盖正常节拍、首迟到、持续超期有界阻塞、补跑后恢复、tick回绕、DelayUntil参数竞争和其它错误；保留身份/ready/ADC既有回归。协议/服务/工具BUILD同步008.12并离线回归；两目标增量Build、普通HEX对照、map/源配置/产物指纹。原计划板测一次原demo；现已执行且FAIL，原始结果见13.9。出现另一故障保留现场，不自动清错重试。
+
+**实际实现与边界：** 仅freertos.c新增Bench私有AppTaskWaitNext，并在原StartAppTask维护局部catchup_used。用过补跑后的下一次等待优先走osDelay(1)，无论该轮提前/迟到；成功后以实际返回tick+1重建deadline，才清资格。未用补跑的正常路径保留绝对等待，首次到期或Until参数错误才消耗资格并立即执行新一轮。中间件未改。当前CMSIS在内部tick竞争时可能Until返回OK却未进入delayed list，因此本版只保证“连续显式补跑最多1次，补跑后下一轮相对阻塞”，不声称所有正常Until调用都实际阻塞。RTOS延时错误仍Fatal，错误路径不恢复资格。
+
+该修改会改变少数相邻SAMPLE间隔；原速度差分仍使用真实非零DWT间隔，未假装每次固定1ms。其现有计数死区/固定滤波系数与电机速度适用性未重新标定。持续负载过高仍可能越过2ms，保护照常撤销；ADC消费相位与完整ISR时序仍未关闭。
+
+| 008.12验证/资源 | 结果 |
+| --- | --- |
+| SRC | 独立审查PASS；普通freertos分支去除空行后与HEAD原实现相同 |
+| HOST | 实际调度helper＋完整StartAppTask在OS/时钟桩下Bench639/Normal9；原3576/175/232保留；协议135945、服务216场景27154、工具12通过 |
+| HOST修正记录 | 服务query-valid首次因固定回包仍写008.11失败；仅同步版本字节12/08后完整回归通过，初始日志保留 |
+| BUILD | ARMCC5.06u7/960，Bench21秒、普通10秒增量均0错误0警告；源/Keil配置191项哈希复核一致 |
+| 产物/资源 | Bench实际ROM70508 B（+72），RW+ZI26288 B不变；普通ROM61556/RAM25776且HEX逐字节相同。heap16384/MSP4096/appTask4096从堆分配不变；局部补跑状态及函数调用使用现有任务栈，最坏栈待实测 |
+| HW | 完整演练FAIL，反馈年龄2013.255us/phase1；新增HOST仍仅行为模型，不代表实际阻塞/最坏占用/物理输出 |
+
+本轮修改已有2个固件文件（freertos.c、版本头）、4个测试/工具及原4份文档；新增文件0。不改IOC、任务数量/优先级、Keil项目或优化等级；不改app_policy门槛、ADC/AD2S代码和CAN控制逻辑。未自动暂存/提交、下载或操作硬件。
+
+**008.12历史操作（已执行；当前步骤见13.9）：**
+1. 保持功率母线断开、仅控制/传感器供电。Keil选择FOC_T_CommandBench，退出旧调试，Download已构建008.12，重新调试/复位一次/Run约3秒。无需Rebuild All或CubeMX。
+2. 关闭PCAN-View，新启动下只执行一次：
+
+       python tests/pcan_command_bench.py --demo-update --bench-no-power --request-id 2
+
+3. 记录执行前后四项：app_ready_loss_trace.captured、current_sense_fault_trace.captured、board_output_enabled、app_task_deadline_misses。前3项预期均0；deadline_misses诚实保留超期计数，发生补跑不抹掉它，不以非零单独判新调度失败，需同时看前后变化/是否持续增长及原保护。
+4. 保留完整终端：目标是START/UPDATE均APPLIED且最终demo PASS。若失败，保持同次Run，不重发/清错/复位；先发终端与四项，不把重启后的0同旧现场拼接。即使通过也仅支持这次禁输出演练，完整时序/ADC同帧/长期运行仍未验收。
+
+### 13.9 008.13 runtime单文件O1性能对照（2026-11-18，已板测FAIL）
+
+**008.12新证据：** 用户两图f37333a4-06db-4a37-aaf8-02c38d053858/2931f8ac-fa21-4bbf-bd1b-c654d054206f：START2 APPLIED47ms，UPDATE3在page35拒绝EPOCH04，耗31ms；同boot1D029600 DDC70AB8 3038393E AE8445A1，epoch2(start1)、status05011902、fault0/time1/rx_age768。Watch ready.captured1、ADC.captured0、output0、live deadline总数2；无执行前基数，不当作本轮增量或补跑次数。随后同次用户读reason4、age624DB=402651cycles=2013.255us、task_phase1，支持仅DWT反馈年龄超限。phase1覆盖AD2S调用以及其后CaptureSampleGap，不精确定位SPI/计算/发布，不证明新快照尚未发布。完整演练FAIL，有界补跑未消除问题。用户已获知可结束调试断控制供电，现场无需继续保留。
+
+**单变量计划：** 仅FOC_T_CommandBench/app_runtime.c添加文件级ARMCC-O1；既有can_link O1保留，其余/普通target O0不变。实际runtime对象Input Comments确认为O0，FastISR section988B（指令代码866B）、局部SP访存多，具有优化局部寄存器存取的空间；静态位点不是热路径/WCET。该文件包含ISR、后台、启动，收益不能归因单一阶段；AD2S的SPI/速度计算/发布仍在未改ad2s1210.c，不直接加速SPI。O1可能改变ADC消费相位/局部Watch可见性，本轮使用的全局volatile诊断保留；未引用符号是否被链接保留需核map。
+
+**保持边界：** 不改runtime源逻辑、2ms门槛、真实SAMPLE时间戳、快照发布、20kHz控制/ADC/Park顺序、任务/有界补跑策略、CAN身份/epoch/原始期限及两道硬件守卫。不做Guard纯RAM去重，不更改其它优化等级/时钟/cache/IOC/链接，不增加源/头/任务。普通HEX须与008.12逐字节相同。
+
+**验收计划：** 同步BUILD008.13/原工具，协议/服务/工具及既有runtime HOST回归；两target增量Build，核实际对象Input Comments及文件级工程diff，核map/指纹。独立审阅实际FastISR/Background/ReadCanStatus机器码，验证volatile时刻/计数、Begin/Final调用、关断在诊断前、PRIMASK/DMB/captured发布、正常ADC相对位置及后台AD2S先于CAN。HOST及静态字节数不当作板测耗时，先不承诺性能改善或根因关闭。板测继续一次原demo、最少关键值，遇错保留同次现场。
+
+**实际变化：** uvprojx中仅CommandBench/app_runtime.c添加与现有can_link.c相同的51行FileOption；去除此唯一块可恢复本轮保存的原工程逐字节内容，两target的65源文件/宏/顺序/目标选项不变。actual fromelf Input Comments确认runtime从-O0到-O1、can_link仍-O1、port/AD2S/普通runtime仍-O0。本轮191输入清单相对008.12仅版本头与uvprojx变化，runtime.c及其它算法/驱动/调度源码指纹不变。
+
+**实际机器码关键项：** FastISR 0x08001522读取AD2S快照，随后HAL tick和DWT；unsigned BHI超龄比较保留，ready冻结仍使用同份局部快照及原判断时刻。BeginCycle0x080015BC、FinalPermit0x08001712及底层两次GuardTimedCommands/LeaseValid保留；Final处在保存PRIMASK/CPSID与恢复窗口内，并读取新的HALtick。RotorFeedback/可选Ramp仍在CurrentMonitor之前，sample_sequence前后两次真实LDR保留。ADC故障仍LatchFault→RejectActive→ApplyNULL→冻结，Latch内部先DisableOutputs；最终SetOutputs位于Final之后，Bench Apply均为NULL。Ready及ADC冻存payload→DMB→captured，ReadCanStatus及遥测快照仍位于各自CPSID/MSR窗口内；后台AD2S→ObserveTime→CAN及phase写入保留，FastISR尾部计时覆盖诊断。实际地址随链接变化，不作为源码接口；核关键顺序不替代完整优化语义/实机时序验收。
+
+| 008.13验证/资源 | 结果 |
+| --- | --- |
+| HOST | 原runtime3576/175/232/Bench639/Normal9、协议135945、服务216场景27154、工具12全通过；GCC-O2/OS桩不代表ARMCC时序 |
+| BUILD | ARMCC5.06u7/960；Bench16秒、普通2秒，增量均0错误0警告；普通HEX逐字节相同 |
+| Bench资源 | Code68788/RO928/RW944/ZI25336，压缩RW载入112；实际ROM69828 B（-680）、RW+ZI26280 B（-8）。两份诊断仍48/44 B，heap16384/MSP4096/appTask4096不变；无显式链接/存储布局修改，实际地址以新map为准 |
+| 尺寸边界 | FastISR代码866→788 B；大小变化不证明热路径/最坏周期缩短，完整IRQ、关中断时长和最坏栈仍需板验 |
+| HW | FAIL：START后ADC_FRAME故障，完整演练未通过；同次冻结值及边界见13.10 |
+
+本轮修改已有1个固件版本头、1个Keil工程、3个测试/工具及原4份文档；新增文件0，未改runtime/ADC/AD2S/freertos源码。用户uvoptx变更保留；未自动Git、下载或操作硬件。文件级选项要求Keil重载工程；后续CubeMX重生成需复核两个O1覆盖项。优化后局部变量单步/Watch可能不再逐行可见，本轮四项volatile全局诊断仍有链接地址。原本无使用者的app_start_rejected_count被链接移除，此版不能再Watch该符号。
+
+**下一轮操作（无需现在上电）：**
+1. 保持功率母线断开。重新打开/重载Keil工程以读入新文件选项，选FOC_T_CommandBench；退出旧Debug后Download已构建008.13，再调试/复位一次/Run约3秒。无需Rebuild All或CubeMX。
+2. 关闭PCAN-View，在新启动只执行一次：
+
+       python tests/pcan_command_bench.py --demo-update --bench-no-power --request-id 2
+
+3. 只看四项并记录前后：app_ready_loss_trace.captured、current_sense_fault_trace.captured、board_output_enabled、foc_isr_max_cycles。前三项预期0；最大周期用于本轮观察，与旧轮不同负载的最大值不能当精确单路径收益。
+4. 两笔APPLIED与最终demo PASS才算本次演练通过；失败保留完整终端和四项，保持同次Run、不重发/清故障/复位。仍不代表ADC物理同帧、完整IRQ、最坏栈、长期运行或带功率输出安全。
+
+**栈与RAM细分补证：** FastISR两版均软件保存36 B，局部SP空间100→84 B，固定软件帧136→120 B；静态真实SP访存位点51→33、BL位点31→30，含冷分支，非热路径周期/完整IRQ栈。RAM减少8 B已查明：O1分离的数据段使未引用的volatile全局app_start_rejected_count被链接剔除4 B（原本无计数写者）；ucHeap从240016AC移动到240016A8，长度4000不变，原MSP前4 B对齐填充消失。MSP仍1000 B，栈顶由240066B0到240066A8；AD2S快照32 B、ready记录48 B、ADC记录44 B不变。不能把局部帧节省当作最坏栈已验收。
+
+
+### 13.10 008.14 Bench先取ADC原始码、原位置计算
+
+**008.13实测：** 同boot 1BEF4DB1 F0417BED 24A5957D 09E0BBB6，START2 APPLIED、page38耗31ms余969ms；UPDATE3在page30拒绝FAULT09。epoch1→2，status05811905/fault200/time_state1/rx_age288。Watch最大FastISR244A=9290cycles=46.45us、输出0、ADC捕获1、ready捕获0；无前值，不能据最大值差证明优化收益或完整IRQ余量。完整演练FAIL；ready捕获0只表示本次未冻结该事件，不能证明反馈时序已修复。
+
+同次补充冻结记录：first_missing_adc=1、check_interval_cycles=244C=9292（46.460us）、body_entry_interval_cycles=25BF=9663（48.315us）、entry_to_check_cycles=CEE=3310（16.550us）。由相邻入口/检查关系推得上次入口至检查3681cycles（18.405us），当前前缀缩短371cycles/1.855us；入口间隔也比标称9996cycles/49.98us少333cycles/1.665us。只支持检查时点有软件执行/进入间隔变化，未证明跨过JEOS边沿，更不能当作物理采样间隔。ADC1是首个未就绪，ADC2/3因短路未检查。
+
+**范围与取舍：** 仅Bench，在FastISR现有runtime_started和输出安全检查/已有故障撤输出之后，AD2S快照、BeginCycle、RotorFeedback、分频Ramp之前，执行一次原CurrentSense_HasNewSample；只有成功才按原GetRaw顺序复制U/V/W/母线到4个uint16_t栈局部变量，raw_valid只在当拍使用。不新建公共结构体/跨拍缓存/模块，不读JDR失败帧，不等待或晚处补读。CurrentSense检查及清旗策略不变，未宣称四路对应同次硬件触发。
+
+CurrentMonitor新增Bench专用ProcessRaw_20kHz(angle,u,v,w,bus)接口；原Run_20kHz保持普通目标路径。共用原monitor_sample_sequence++之后的处理体，原FastISR处理位置才推进sequence、2000帧等待/4096帧零偏、ready和Clarke/Park。此时使用RotorFeedback/Ramp更新后的foc_theta，不能把整个电流计算搬到早处，也不能用提前取得的旧角度。BeginCycle仍看到上一处理拍的校准状态。缺帧则晚处不处理，原sample_ok与ADC_FRAME故障路径继续生效。
+
+输出保护及BoardSafety_LatchFault→RejectActive→ApplyNULL→CaptureFault顺序不变，首次真实失败scratch由早处唯一检查生成；完整记录仍故障关断后冻结。entry_to_check现在表示早取位置，不与013旧位置作同点性能比较。保持2ms年龄阈值、AD2S时间戳、租期/epoch、PWM禁用、RTOS调度、ADC/TIM/IOC、优化等级；普通目标应保持HEX相同。
+
+**风险及验收：** 提前检查仍可能早于转换完成，IRQ迟到/背靠背执行、ADC寄存器跨触发覆盖等仍未排除；这是可回退的Bench对照，不是硬件时序已合格。实际软件验收需覆盖：唯一检查/成功一次复制、失败不补读/不复用、两阶段之间寄存器变化不改变本拍raw、晚处角度进入Park、校准/sequence计数原样、原故障先关断及正常分支不变；复用已有HOST入口，不新建测试源文件。两目标增量构建、实际机器码关键顺序、normal HEX、map/栈与源/配置/产物指纹均核对；板测由用户执行一次原demo并只看4项，失败先保存现场不重试。
+
+
+**实际结果：** 按上述范围实现，业务仅修改原runtime.c及current_monitor.c/.h；版本头和3个协议/工具测试同步008.14，原runtime HOST扩展，原4份文档更新；本轮新增tracked文件0。没有改变驱动、ADC/TIM/IOC、RTOS、Keil选项或用户uvoptx，没有自动Git/下载。
+
+| 008.14验收 | 结果与边界 |
+| --- | --- |
+| SRC/机器码 | 独立复核PASS：唯一早检查/条件复制；晚处foc_theta、sequence及2000/4096校准；缺帧关断后冻结；Begin/Final、PRIMASK/DMB保留。不是完整形式等价证明 |
+| HOST | 新早取Bench71243/普通原位读取71243断言通过；测试实际runtime片段、完整monitor生产块、实际GetRaw、真实Xmath；JEOS/硬件变化为桩，真实HasNewSample由原232断言覆盖。原3576/175/Bench639/Normal9、协议135945、服务216场景27154、工具12通过；非完整FastISR/物理采样仿真 |
+| HOST夹具修正 | 首次新Bench因角度精确浮点相等断言失败；仅测试改为既有Near容差1e-4后完整通过，生产代码未因该失败修改。具体浮点误差原因未测；原日志被最终运行覆盖，失败原文追加证据 |
+| BUILD | ARMCC5.06u7/960，Bench22秒、普通15秒增量0错误0警告；191项源/头/工程指纹与编译前一致。普通HEX与013逐字节相同 |
+| 资源 | Bench ROM69840 B（+12）、RW+ZI26280 B（不变），普通61556/25776 B不变。FastISR代码834 B，固定软件栈36+108=144 B（+24）；不含硬件压栈/被调函数/嵌套。heap16384/MSP4096/appTask4096从堆分配保持，最坏栈待验 |
+| HW（2026-11-19） | 完整演练 FAIL。冻结 reason_bits=4、age_cycles=0x61EA0、task_phase=1，详见本节末。 |
+
+**本轮已执行的操作（保留供复核）：**
+1. 功率母线仍断开；选择FOC_T_CommandBench，退出旧Debug，Download已构建008.14，再进入Debug、复位一次并Run约3秒。需要编译时只Build（F7），无需Rebuild All/CubeMX。
+2. 关闭PCAN-View，在PowerShell运行一次：
+
+       python "D:\stm32H750\High_fengshan\FOC_T\tests\pcan_command_bench.py" --demo-update --bench-no-power --request-id 2
+
+3. 只看4项：current_sense_fault_trace.captured、app_ready_loss_trace.captured、board_output_enabled、foc_isr_max_cycles，执行前后留值，并保留完整终端。预期两笔APPLIED及demo PASS，前3项均0；最大周期仅记录，不单凭小于50us认定完整IRQ合格。
+4. 若失败，不再发START、不清故障；先保存终端和这4项，保持同次Run供读取现有冻结记录。成功也仅支持此禁输出一次演练；真实输出与长期/最坏时序另验。
+
+**2026-11-19 板测结果。** START 2 已应用。后台仍处于采集阶段时，TIM1 读到的已发布旋变样本年龄为 401056 个周期，按 200 MHz 为 2005.28 µs，超过当前门槛 5.28 µs。冻结记录只置 DWT 年龄位。许可撤销后 epoch 从 1 变成 2，UPDATE 3 在页 0x35 收到 0x04。ADC 故障记录未触发，输出观察值为 0。本次未取得本轮 SAMPLE 边沿与发布时刻的配对记录，采样启动和采样后交付各耗时多久仍待测。
+
+
+### 13.11 008.15 旋变采样与发布配对计时
+
+**计划（2026-11-19）。** 008.14 的冻结点处于采集粗阶段，已发布反馈的年龄越过 2 ms。为定位时差，本轮在原 Bench 路径中保留原判定所用样本的序号和时刻，检查对应的下一次采样尝试是否已产生 SAMPLE 边沿，并将该尝试的发布时刻与边沿配对。阶段和有效标志须区分“边沿尚未发生”“尚未发布”“已经完成”和不完整记录。输出权限、反馈时间戳语义和 2 ms 门槛沿用现有控制合同。
+
+验收采用真实生产路径的主机测试和 ARMCC 两目标增量构建。检查采样序号关联、失败采样与首次历史、计数回绕、现场单次保留、发布可见性及诊断开销。核对普通目标 HEX、ROM/RAM 和编译输入指纹。仅用户操作板子，完整演练和诊断捕获分别记结果；若演练未发生反馈超龄，本次配对诊断仍待实测。
+
+**接口约定。** 首次 ready 损失的原因包含 DWT 年龄时，TIM1 保留判定使用的已发布快照与该次 DWT 时刻。后台发布下一相邻序号后，利用这次采样已有的 SAMPLE 时间和发布屏障之后的 DWT 读值完成配对。计算两段时间的单位均为 CPU 周期。诊断计算安排在发布临界区之外，SAMPLE 使用原有时间戳。
+
+| ad2s_age_trace.state | 解释 |
+| --- | --- |
+| 0 | 本次启动尚无配对记录 |
+| 1 | 已记录超龄事件，等待相邻序号完成发布 |
+| 2 | 相邻样本在判定时或更早已经 SAMPLE，随后才发布 |
+| 3 | 相邻样本在判定之后才 SAMPLE |
+| 4 | 相邻样本发布了无效位置 |
+| 5 | 序号或时间信息无法可靠配对 |
+
+板测读取 ad2s_age_trace.state、edge_interval_cycles、edge_to_publish_cycles。只有 2/3 的时差用于定量分析。主机测试覆盖序号及计数回绕、缺失和同刻边界，以及可以检测到的时间异常。板上需保持连续 Run。状态 2/3 描述实际边沿相对于判定的先后，解释时要同时看两段耗时。
+
+
+**实现及证据。** 原 app_runtime 的 CaptureReadyLoss 保留首次 ready 损失。只有该冻结记录含 DWT 超龄位时，TIM1 才在输出处理之后用原样本与判定时间调用 AD2S1210_ArmAgeTrace。若首次损失来自别的原因，本启动的配对记录可一直为 0。条件及顺序分别见原 app_runtime.c 和 ad2s1210.c。
+
+发布者复用 AD2S1210_PublishSnapshot 在快照复制和 DMB 之后、PRIMASK 恢复之前已有的 DWT 读数，将其作为此次发布的软件时间标记。恢复中断之后才检查是否有等待中的记录。源序号自身的迟到发布回调会被忽略，下一个相邻序号按 32 位回绕匹配。写者每次先写完整数据，再用 DMB 提交状态。位置事务失效时以 4 结束，只有速度无效但位置样本有效时仍可配对。间隔为 UINT32_MAX 表示无可用结果，读数以状态为先。
+
+状态 2 表示后继 SAMPLE 时间标记早于或等于控制判定时刻，当时新快照尚未交给控制端。状态 3 表示后继 SAMPLE 时间标记晚于判定时刻。两种情况下都要合看两个间隔，前后两段延迟可能共同造成超龄。连续运行是时钟解释的前提，双时钟同时暂停等情形可能无法识别。
+
+| 验收层级 | 008.15 结果 |
+| --- | --- |
+| SRC / 机器码 | PASS，核实原关断与捕获调用先后、发布端点、恢复 PRIMASK 后检测等待状态、数据先于最终状态可见 |
+| HOST | PASS，原 ready 捕获与配对交接 27 条，实际 arm/complete 和 publish 路径 229 条。原启动 3576、ready 175、ADC 232、调度 639/9、电流处理两目标各 71243 条继续通过。原协议 135945、服务 216 场景 27154 条、PCAN 工具 12 场景通过。时间和抢占由夹具模拟 |
+| BUILD / 编译期检查 | PASS，ARMCC5.06u7/960。Bench 21 秒，普通 17 秒增量，均 0 错误 0 警告。实际 Bench 编译配置及普通 HEX 对照已核实。本轮无新增编译期断言 |
+| 资源 | Bench ROM 70212 B（+372）、RW+ZI 26312 B（+32）。Watch 记录 24 B，私有源时间 8 B。普通 ROM 61556 B、RAM 25776 B。FastISR 固定软件帧 144 B，最坏运行栈待测 |
+| HW | 配对记录有限 PASS（state=2）；完整 START→UPDATE 演练 FAIL。原始读数与本次结论见下文。探针对板上实际时间的影响尚待独立测量。 |
+
+本轮扩展原 ad2s1210.c/.h、app_runtime.c、原版本头，复用原 HOST 脚本、PCAN 工具和协议/服务夹具。文档继续使用 008 spec、原验证记录、项目入口及架构页。
+
+**本轮台架操作（已执行）**
+
+1. 功率母线断开，控制板与传感器供电。Keil 选择 FOC_T_CommandBench，下载已构建的 008.15，重新进入 Debug、复位一次，然后连续 Run 约 3 秒。关闭 PCAN-View。
+2. 在 PowerShell 对本次启动只执行一次命令。
+
+       python "D:\stm32H750\High_fengshan\FOC_T\tests\pcan_command_bench.py" --demo-update --bench-no-power --request-id 2
+
+3. 保留完整终端。Watch 只读取 ad2s_age_trace.state、ad2s_age_trace.edge_interval_cycles、ad2s_age_trace.edge_to_publish_cycles，发原始十六进制。state=1 时让任务继续运行，若仍为 1 就按原值记录。在 200 MHz 配置下，周期数除以 200 得到微秒。
+4. 两笔 APPLIED 且终端 PASS 支持本次禁输出命令演练通过。若此时 state=0，本轮没有配对事件。若终端失败但 state=0，保留现有故障或 ready 现场供分类。出现拒绝后保持同次 Run 并保留截图，勿再次 START 或清故障。
+
+**2026-11-19 板测结果。** START 2 已应用。后继角度采样发生在上一个 SAMPLE 后 1998.79 µs，新角度的发布标记比后继 SAMPLE 晚 248.61 µs。state=2，说明 TIM1 判定反馈超龄时，后继采样已开始，新快照尚未可用；epoch 从 1 变为 2，UPDATE 3 被拒绝。自旧 SAMPLE 到新发布的 2247.40 µs 是两个间隔之和。本次截图没有显示 TIM1 判定瞬间的精确年龄。
+
+当前采样目标为每 1 个 1 ms 的任务 tick 尝试一次。这次到后继 SAMPLE 时，2 ms 年龄预算只剩 1.21 µs。按现有 SPI1 标称 250 kHz 和每次 24 bit 计算，单是移位就约需 96 µs。下一步优先核对上次 SAMPLE 至该轮后台结束、任务等待/再次获得 CPU、本轮后台入口至下一次 SAMPLE 各段的耗时。现阶段尚不能从这组读数区分 CAN 工作量、RTOS 等待和 TIM1 抢占各自贡献。
+
+### 13.12 008.16 相邻采样间隔分段
+
+**计划（2026-11-19）。** 以 008.15 已配对的源样本与相邻后继为依据，用上一轮任务工作结束和本轮任务入口两处时间，计算源 SAMPLE 至上一轮结束、上一轮结束至本轮入口、本轮入口至后继 SAMPLE 三个区间。序号和时间顺序都须匹配；有效结果应加和为原配对间隔。中间区间包含两轮之间的调度代码、等待与抢占，不能从它单独推出操作系统阻塞时长。
+
+优先复用现有 DWT 时间标记。复位、无效结果、缺少历史、计数回绕和任务被 TIM1 打断均纳入测试。只在禁输出 Bench 启用诊断；普通镜像与 008.15 HEX 比对。用户板测只需截取一次原演练终端及对应三项分段读数。
+
+**实现及结果。** 采样任务复用已有的上一轮工作结束和本轮入口时间戳。008.15 的配对产生终态后，在同步采集返回处最多补读一次后继快照。只接受有效快照、匹配的相邻序号及位于同一源边沿间隔内的两个有序端点。单段允许为零，三个有效值之和等于同次 ad2s_age_trace.edge_interval_cycles。该测量不会细分任何一段内的中断抢占时间。
+
+| app_task_interval_trace.state | 三个周期数的含义 |
+| --- | --- |
+| 0 等待 | 尚未形成最终记录，三项初值均为 0xFFFFFFFF |
+| 1 完成 | old_edge_to_end_cycles 为源 SAMPLE 到上轮工作结束，between_steps_cycles 为上轮工作结束到本轮入口，entry_to_edge_cycles 为本轮入口到后继 SAMPLE |
+| 2 无可用分段 | 缺少可用的相邻工作记录、采样配对或有序端点，三项均为 0xFFFFFFFF |
+
+HOST 新增分段断言 501 条，既有运行时、协议、CAN 服务及电脑工具回归通过。Keil 增量编译 Bench 和普通目标均为 0 错误、0 警告。Bench 比 008.15 增加 ROM 160 B、静态 RAM 16 B。普通 HEX 与 008.15 的 SHA-256 一致。软件构建与模拟测试证据见[验证记录](../validation/008-can-query-20261116.txt)。
+
+**本轮涉及的现有文件**
+
+| 分组 | 文件 |
+| --- | --- |
+| 固件 | Core/Inc/app_runtime.h、Core/Src/app_runtime.c、Core/Inc/can_link_protocol.h |
+| 主机回归与电脑工具 | tests/run_runtime_boot_host.py、tests/can_link_protocol_host.c、tests/can_link_service_host.c、tests/pcan_command_bench.py |
+| 文档与证据 | docs/README.md、docs/ARCHITECTURE.md、docs/specs/008-can-command-protocol.md、docs/validation/008-can-query-20261116.txt |
+
+按上述路径核对暂存，手头尚未跟踪的对应脚本也在本轮范围内。Keil 个人设置（.uvoptx）和 build/ 下的本地构建产物无需暂存。
+
+**008.16 上板步骤**
+
+1. 保持功率母线断开，给控制板和传感器供电，关闭 PCAN-View。Keil 选择 FOC_T_CommandBench，下载已构建的 008.16。进入 Debug、复位一次，连续 Run 约 3 秒。
+2. 在 PowerShell 执行一次下列命令。测试工具检查接口版本，先发 START 2，再发 UPDATE 3。
+
+       python "D:\stm32H750\High_fengshan\FOC_T\tests\pcan_command_bench.py" --demo-update --bench-no-power --request-id 2
+
+3. 保留完整终端。两笔 APPLIED 且终端 PASS 表示本轮禁输出演练成功。如果再次拒绝，保持本次 Run，复位前在 Watch 读取下面三项并保留原始十六进制。
+
+       app_task_interval_trace.old_edge_to_end_cycles
+       app_task_interval_trace.between_steps_cycles
+       app_task_interval_trace.entry_to_edge_cycles
+
+三项全为 0xFFFFFFFF 时，再看 app_task_interval_trace.state 以区分等待和无可用分段。成功演练没有触发超龄事件时，三项也会保持初值。200 MHz 配置下，周期数除以 200 就是微秒。拒绝后保留同次现场，避免重复发 START。
+
+**2026-11-19 禁输出板测结果。** START 2 已应用。同一启动内运行代次由 1 变为 2，UPDATE 3 在 epoch 页 0x35 收到拒绝码 0x04，随后读回 fault=0。三项 Watch 按 200 MHz 换算如下。
+
+| 同一对采样边沿内的区间 | 周期数（十六进制） | 时间（µs） |
+| --- | --- | ---: |
+| 上一 SAMPLE 到该轮后台收尾 | 0x00038335 | 1150.985 |
+| 上一轮收尾到下一轮入口 | 0x0002487D | 748.145 |
+| 下一轮入口到后继 SAMPLE | 0x00004E2E | 100.070 |
+| 三段之和 | 0x000619E0 | 1999.200 |
+
+后继 SAMPLE 出现时，距旧样本的 2 ms 年龄门槛只余 0.800 µs，之后还须完成读取并发布新快照。本轮未独立读取发布耗时或撤销时的精确年龄。首段占 57.6%，其中包含旋变读取的后半程、后台 CAN 服务、当轮可能触发的周期工作，以及这段时间内的中断抢占。下一步优先检查首段各项对实际经过时间的贡献。中段的 748.145 µs 包含调度、等待及抢占。
+
+### 13.13 008.17 采样后后台耗时优化
+
+**计划（2026-11-19）。** 以 008.16 板上冻结的 1150.985 µs 首段为基线，优先消除上一 SAMPLE 到该轮后台收尾的可避免工作。保留采样顺序、2 ms 反馈门槛、命令有效期和禁输出台架约束。通过源码、已有主机回归和两目标构建检查选定优化，再用同一演练复测。单次任务耗时包含中断抢占，改善幅度及完整 START/UPDATE 演练结果须以本版本板测为准。
+
+**选定改动。** 仅在禁输出 Bench，把每 5 ms 到期的速度遥测分成两步。采样任务成对保留给定速度和反馈速度，既有可抢占的空闲钩子在有空闲时做 CSV 格式化并启动 UART 中断发送。使用一个待发位置，满槽或串口忙时允许丢帧并计数。若处理器持续没有空闲，遥测可能延后或丢失。调度、每秒堆查询、SPI、电流采集和 CAN 保护机制沿用 008.16。
+
+验收涵盖交接时抢占、先后两帧、忙/满/格式化异常、正常目标原有路径及已有协议/运行时回归。核对 ARMCC 的 Bench 与普通镜像、静态内存和代码路径。板上对照首段基线，并使用现有发送/丢帧计数检查遥测能否持续发出。优化先移出可延后工作，不能据此认定上次故障拍恰好执行过遥测。
+
+为分清原首段的内部耗时，Bench 复用上轮的采集结束与遥测时长标记，计划在原分段记录中增加旧 SAMPLE 至采集返回后计时点、旧轮遥测排队耗时两个明细。两个明细都已包含在首段中。采集明细含 SPI、发布及期间抢占，排队明细只覆盖采样任务中的提交或放弃。空闲任务若迟到一个遥测周期（5 ms）将丢弃这一对速度，避免把长期滞留的旧数据作为新帧发送。
+
+**008.17 软件检查。** 已实现上述单槽交接与同拍子项。到期时旧槽尚在使用，生产者丢弃新帧并将占用槽标为过期。Idle 格式化后再次检查年龄与槽状态，调用可抢占的 HAL 启动发送，两者之间仍可能被抢占。发送缓冲区在 UART 忙时保持独占。栈扫描开关对遥测服务独立。旧轮遥测未到期时其排队时长为 0。子项无法配对时保持 0xFFFFFFFF，仍可单独使用有效的原三段。复用已有时间戳，没有为子项增加周期性 DWT 读取。
+
+实际 ARMCC 反汇编证实 Bench 后台到期处只调 QueueTelemetry。CSV 格式化和 HAL_UART_Transmit_IT 都由 Idle 路径在可抢占区域执行。主机检查通过，覆盖 Bench 遥测交接 84 项、普通同步路径 34 项和同拍分段 771 项。Bench 增量构建 26 秒，普通目标 23 秒，均 0 错误、0 警告。Bench ROM 70508 B、RAM 26360 B，较 008.16 分别增加 136 B 和 32 B。普通 HEX 与 008.16 相同。512 B Idle 栈的静态 C 调用深度为 176 B，加计 208 B 可用浮点上下文与对齐后估计还剩 128 B，实际 Idle 最低水位待测。现有 appTask 栈探针仅观察 appTask。
+
+**008.17 禁输出 Bench 板测步骤**
+
+1. 功率母线保持断开，只给控制板和传感器供电。关闭 PCAN-View，Keil 选择 FOC_T_CommandBench，下载 008.17，再进入 Debug，复位一次并连续 Run 约 3 秒。
+2. 在 PowerShell 执行一遍原演练，保留终端输出。
+
+       python "D:\stm32H750\High_fengshan\FOC_T\tests\pcan_command_bench.py" --demo-update --bench-no-power --request-id 2
+
+3. 若 UPDATE 再次因运行代次拒绝，保持 Run，复位或断电前只需截取以下三项 Watch，与同一轮的终端截图对应。
+
+       app_task_interval_trace.old_edge_to_end_cycles
+       app_task_interval_trace.old_edge_to_acquisition_end_cycles
+       app_task_interval_trace.old_telemetry_queue_cycles
+
+   第一项与 008.16 的 0x00038335（1150.985 µs）对照。后两项是第一项内的明细，差额包含 CAN 等未分列的工作和期间抢占。200 MHz 下周期数除以 200 得到微秒；一次故障事件只能给出该次耗时。
+4. 若两笔 APPLIED 且终端 PASS，保存结果即可。没有超龄事件时冻结值可为 0xFFFFFFFF。另行观察遥测健康时比较 current_telemetry_tx_count 和 current_telemetry_drop_count 的增量；前者增加表示 HAL 接受发送，具体线端内容须由串口接收验证。过期丢帧、Idle 实际栈余量及最坏时序仍需板测。
+
+本轮扩展既有 4 个固件文件（Core/Src/app_runtime.c、Core/Src/freertos.c、Core/Inc/app_runtime.h、Core/Inc/can_link_protocol.h），6 个既有测试/工具文件（tests/run_idle_hook_host.py、tests/test_idle_hook_host.c、tests/run_runtime_boot_host.py、tests/can_link_protocol_host.c、tests/can_link_service_host.c、tests/pcan_command_bench.py）及原 README、架构、规格和验证记录。没有新建业务源或头文件。暂存时包含本地尚未跟踪的原 PC 工具，排除 build/、编译产物和用户 .uvoptx。
+
+**2026-11-19 板测结果。** START 2 已应用。同一启动内 epoch 从 1 变为 2，UPDATE 3 在 0x35 页收到 0x04 拒绝，随后查询到 fault=0。两张截图中的同拍计时按 200 MHz 换算如下。
+
+| 首段总量与明细 | 周期数 | 耗时 |
+| --- | ---: | ---: |
+| 上一 SAMPLE 到该轮后台收尾 | 0x00029756 | 849.070 µs |
+| 其中，上一 SAMPLE 到采集返回后计时点 | 0x000138A1 | 400.165 µs |
+| 其中，采样任务处理遥测排队 | 0x00000000 | 0 µs |
+| 采集返回到后台收尾（总量减去采集明细） | 0x00015EB5 | 448.905 µs |
+
+首段较 008.16 的单次记录少 301.915 µs（26.23%）。本拍没有测到遥测排队耗时，无法从两次独立事件量化迁移遥测的收益。400.165 µs 包含读取、发布及期间抢占，448.905 µs 包含命令有效期和 CAN 服务、可能到期的诊断及期间抢占。本次截图未给出两轮之间的耗时、下一次 SAMPLE 或新快照的发布时间，不能从首段单独判断完整 2 ms 反馈预算。后续可从同一次运行的 ad2s_age_trace.edge_interval_cycles 和 edge_to_publish_cycles 核对旧 SAMPLE 到新反馈发布的时间。遥测在板上的发送和丢帧情况仍待验证。
+
+### 13.14 禁输出命令演练的验收边界
+
+2026-11-19。检查对象为功率母线断开的 CommandBench 固件。008.17 已记录 START 2 应用、UPDATE 3 被拒，完整事务的本次结果为 FAIL。首段 849.070 µs 的采集工作已完成；该值只用于定位问题。以下次数是本阶段的工程收尾约定。
+
+**本轮取证上限为一次，已执行。** 如果上一轮仍在同一次 Run，直接在 Watch 展开 `ad2s_age_trace` 读取以下三项，保留截图即可断电。如果现场已丢失，可在同一 008.17 镜像上重新上电，关闭 PCAN-View，保持功率母线断开，以控制板及传感器供电，Keil 连续 Run 约 3 秒，从工程根目录执行一遍既有演练。
+
+    python tests/pcan_command_bench.py --demo-update --bench-no-power --request-id 2
+
+| 冻结字段 | 判读 |
+| --- | --- |
+| `ad2s_age_trace.state` | 2 或 3 表示相邻有效样本已配对。2 表示后继 SAMPLE 在超龄检查时已经发生，3 表示 SAMPLE 在检查之后才发生。 |
+| `ad2s_age_trace.edge_interval_cycles` | 旧 SAMPLE 到后继 SAMPLE 的周期数。 |
+| `ad2s_age_trace.edge_to_publish_cycles` | 后继 SAMPLE 到对应新快照发布标记的周期数。 |
+
+有效配对时，两项周期数之和除以 200 得到微秒。若边沿间隔达到 400000 个周期（2000 µs），到下一次 SAMPLE 时旧样本的时间预算已经用尽。若边沿间隔较短、但加上发布时间后超过 400000 个周期，则预算在新反馈可用前用尽。随后按证据选择一处可验证的改动。这两项无法单独分离 SPI 和中断抢占。若记录未配对、出现其他故障或本次恰好通过，就保存实际结果并结束此次取证。单次偶发通过仍与之前的失败一并保留。
+
+**一次修正机会，固定次数验收。** 只有查到可说明原因、预期现象和验证方法的改动，才进入一次针对性修正。在同一修正版、同一台架配置下，最多进行三次独立上电，每次只执行一次上述演练，使用与该修正版匹配的脚本。每次都以脚本的最终结论为准。
+
+| 观测结果 | 本阶段处理 |
+| --- | --- |
+| 三次均以 `START/UPDATE demo PASS` 结束 | 关闭禁输出命令演练。脚本要求同次启动内 START、UPDATE 的最终回执均为 APPLIED，在租期过后观察到许可及输出标志为 0、运行代次变化、fault=0 和时间可信，且 UPDATE 的结果可重读。 |
+| 任一次明确拒绝、板端故障或演练中复位 | 立即结束该版验收，保留首个失败现场，登记阻塞。 |
+| 任一次缺少回包、结果不确定 | 停止发送，记为未判定；同一启动保留时可只读查询对应请求结果。此次验收停在这里。 |
+
+按本轮约定，现版额外演练至多一次，候选修正版至多三次。若证据不足以支持修正，或修正后仍未通过，结束本轮板测，将问题保留为反馈时序专项，转入可离线推进的 ODrive Axis 状态转换与故障处理验证。当前 2 ms 保护门槛继续有效。三次通过仅支持此禁输出功能检查；脚本在租期过后读取一次状态，实际运行全程、精确撤销时刻、带载保护和长期可靠性各自另行验收。
+
+**2026-11-19 收尾结果。** 最后一次禁输出演练中，START 2 已应用。同一启动内运行代次由 1 变为 2，UPDATE 3 在页 0x35 收到拒绝码 0x04，故障字读回为 0。完整演练结果为 FAIL。
+
+| 本次冻结记录（200 MHz） | 原始值 | 含义 |
+| --- | --- | --- |
+| `ad2s_age_trace.state` | `0x00000003` | TIM1 检查到旧反馈超龄之后，下一次 SAMPLE 才发生 |
+| `edge_interval_cycles` | `0x00065F8B` | 相邻 SAMPLE 间隔 2088.375 µs，超过 2 ms 门槛 88.375 µs |
+| `edge_to_publish_cycles` | `0x00007BE3` | 后继 SAMPLE 到对应快照发布标记用时 158.575 µs |
+
+旧 SAMPLE 到新快照发布标记合计 2246.950 µs。该总量描述发布时刻，截图未给出 TIM1 实际检查时的精确年龄。13.13 的 849.070 µs 来自另一启动。本次数据可将超时定位在下一次边沿之前，仍无法区分上轮任务收尾、调度等待和中断抢占各自的耗时。
+
+**收尾决定。** 登记反馈采样时序阻塞，保留 2 ms 门槛。现有证据不足以指定一处可验证的固件修正，本轮台架测试在此结束，修正版的三次上电验收未启动。
+
+**ODrive Axis 离线验证。** 当前代码已在电脑上复跑既有命令核心和 FOC 集成测试。命令核心 13 个场景、612 条断言及 FOC 集成 407 条断言通过，涵盖软件运行阶段转换，以及 STOP、租期到期和故障撤销。实板反馈时序仍单独登记。

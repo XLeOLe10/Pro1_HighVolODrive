@@ -27,6 +27,7 @@ static unsigned fail_init_at;
 static unsigned time_init_calls, time_init_seen, timeout_resets, timestamp_resets;
 static unsigned fail_time_at, bad_time_at, fail_runtime_reset;
 static uint32_t kernel_clock_hz = 25000000U;
+static unsigned kernel_clock_reads;
 enum { TIME_HOOK_CLOCK=1U, TIME_HOOK_RESET_BEFORE, TIME_HOOK_RX,
        TIME_HOOK_FILL, TIME_HOOK_START, TIME_HOOK_RESET_AFTER };
 static unsigned time_hook_site, time_hook_skip, time_hook_action, time_hook_fired;
@@ -44,6 +45,8 @@ static void TimeHook(unsigned site)
     if(time_hook_action==7U)host_can_registers.IR|=FDCAN_IR_BO;
 }
 static uint32_t fifo_fill, fifo_free = 32U, cleared_flags;
+static unsigned clear_lease_probe,clear_lease_calls;
+static uint32_t clear_lease_observed;
 static HAL_StatusTypeDef receive_result = HAL_OK, send_result = HAL_OK;
 static FDCAN_RxHeaderTypeDef incoming;
 static uint8_t incoming_data[8];
@@ -108,7 +111,7 @@ static void ReadStatus(CanLinkReadStatus *out)
     CHECK(out != NULL);
     ++status_reads;
     *out = observed_status;
-    if(use_core) out->stop_applied_ticket=real_core.stop_applied_ticket;
+    if(use_core) { out->stop_applied_ticket=real_core.stop_applied_ticket;out->run_epoch=real_core.run_epoch; }
 }
 static void IgnoredStatus(CanLinkReadStatus *out)
 {
@@ -116,6 +119,54 @@ static void IgnoredStatus(CanLinkReadStatus *out)
     ++ignored_status_reads;
 }
 
+
+/* New providers remain inert in every legacy diagnostic scenario. */
+static unsigned submit_calls,receipt_reads;
+static uint32_t submit_result=AXIS_CMD_OK,submit_seq=71U,receipt_success=1U,txn_core_now=1U;
+static CanLinkCommandRequest submitted_command;
+static CanLinkCommandReceipt observed_receipt;
+static uint32_t SubmitCommand(const CanLinkCommandRequest *request,uint32_t *seq)
+{
+    AxisCommandFrame frame;
+    uint32_t result;
+    CHECK(request!=NULL && seq!=NULL);++submit_calls;submitted_command=*request;
+    if(!use_core) { *seq=submit_seq;return submit_result; }
+    /* Real core integration; the dedicated port suite verifies hardware lease
+     * transfer/IRQ boundaries. This callback records the unmodified CAN origin. */
+    memset(&frame,0,sizeof(frame));*seq=0U;
+    frame.run_epoch=request->run_epoch;frame.opcode=request->opcode;
+    frame.control_mode=AXIS_CMD_SPEED_MODE;frame.speed_target_rpm=(float)request->speed_rpm;
+    frame.iq_limit_a=(float)request->iq_limit_ma/1000.0f;
+    frame.received_tick_ms=txn_core_now;frame.expires_tick_ms=txn_core_now+request->ttl_ms;
+    result=AxisCommand_Validate(&real_core.limits,&frame,txn_core_now);
+    if(result!=AXIS_CMD_OK)return result;
+    return AxisCommand_PublishValidated(&real_core,&frame,txn_core_now,observed_status.fault_mask,seq);
+}
+static uint32_t ReadReceipt(CanLinkCommandReceipt *receipt)
+{
+    CHECK(receipt!=NULL);++receipt_reads;
+    if(receipt_success!=1U)return receipt_success;
+    if(use_core) {
+        receipt->command_seq=real_core.receipt.command_seq;
+        receipt->result=real_core.receipt.result;
+        receipt->control_seq=real_core.receipt.control_seq;
+    } else *receipt=observed_receipt;
+    return 1U;
+}
+static CanLinkProviders HostProviders(void)
+{
+    CanLinkProviders value={ReadStatus,RequestStop,CheckTargets,ReadBoot,SubmitCommand,ReadReceipt};
+    return value;
+}
+static void InitLegacyProviders(CanLinkStatusReader status,CanLinkStopRequester stop,
+    CanLinkTargetChecker target,CanLinkBootReader boot)
+{
+    CanLinkProviders providers=HostProviders();
+    providers.read_status=status;providers.request_stop=stop;
+    providers.check_targets=target;providers.read_boot_identity=boot;
+    CanLink_Init(&providers);
+    memset(&providers,0,sizeof(providers)); /* API owns a copy, never this local. */
+}
 
 void HostClearFlag(FDCAN_HandleTypeDef *h, uint32_t mask)
 {
@@ -125,6 +176,7 @@ void HostClearFlag(FDCAN_HandleTypeDef *h, uint32_t mask)
     cleared_flags = mask;
     /* Emulate W1C, preserving any unrelated pending flags. */
     h->Instance->IR &= ~mask;
+    if(clear_lease_probe) { ++clear_lease_calls;clear_lease_observed=CanLink_LeaseValid(0U,31250U); }
 }
 static HAL_StatusTypeDef TimeInitStep(FDCAN_HandleTypeDef *h,unsigned step)
 {
@@ -181,6 +233,7 @@ HAL_StatusTypeDef HAL_FDCAN_ResetTimeoutCounter(FDCAN_HandleTypeDef *h)
 }
 uint32_t HAL_RCCEx_GetPeriphCLKFreq(uint64_t peripheral)
 {
+    ++kernel_clock_reads;
     CHECK(peripheral==RCC_PERIPHCLK_FDCAN);
     TimeHook(TIME_HOOK_CLOCK);
     return kernel_clock_hz;
@@ -266,6 +319,8 @@ HAL_StatusTypeDef HAL_FDCAN_AddMessageToTxFifoQ(FDCAN_HandleTypeDef *h, const FD
 static void Setup(void)
 {
     hfdcan1.Instance = FDCAN1;
+    host_rcc_registers.CR=RCC_CR_HSERDY;
+    observed_status.run_epoch=1U;
     hfdcan1.State = HAL_FDCAN_STATE_READY;
     hfdcan1.Init.NominalPrescaler=5U;hfdcan1.Init.NominalSyncJumpWidth=1U;
     hfdcan1.Init.NominalTimeSeg1=7U;hfdcan1.Init.NominalTimeSeg2=2U;
@@ -287,10 +342,10 @@ static void Setup(void)
 }
 static void Ready(void)
 {
-    CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot);
+    InitLegacyProviders(ReadStatus,RequestStop,CheckTargets,ReadBoot);
     CHECK(can_link_diag.state == 1U && can_link_error_count == 0U);
     CHECK(config_calls == 1U && global_calls == 1U && blocking_calls == 1U && start_calls == 1U);
-    CanLink_Init(IgnoredStatus,IgnoredStop,IgnoredTargets,IgnoredBoot);
+    InitLegacyProviders(IgnoredStatus,IgnoredStop,IgnoredTargets,IgnoredBoot);
     CHECK(config_calls == 1U && start_calls == 1U && boot_reads == 0U);
     CHECK(can_link_time_diag.state==CAN_TIME_TRACKING && can_link_time_diag.reason_flags==0U);
     CHECK(can_link_time_diag.last_rx_age_us==UINT32_MAX);
@@ -420,7 +475,7 @@ static void Latched(int busoff, int register_only)
     CHECK(can_link_diag.error_flags == (busoff ? CAN_LINK_ERROR_BUS_OFF : CAN_LINK_ERROR_RAM));
     CHECK(can_link_error_count == 1U && receive_calls == 0U && send_calls == 0U);
     host_can_registers.PSR = 0U; host_can_registers.IR = 0U;
-    CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot); CanLink_Poll();
+    InitLegacyProviders(ReadStatus,RequestStop,CheckTargets,ReadBoot); CanLink_Poll();
     CHECK(can_link_diag.state == (busoff ? 3U : 2U));
     CHECK(start_calls == 1U && receive_calls == 0U && send_calls == 0U);
 }
@@ -444,22 +499,22 @@ static void BadConfig(unsigned field)
     case 5: host_can_registers.ILE = 1U; break;
     default: hfdcan1.Instance = NULL; break;
     }
-    CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot);
+    InitLegacyProviders(ReadStatus,RequestStop,CheckTargets,ReadBoot);
     CHECK(can_link_diag.state == 2U && can_link_diag.error_flags == CAN_LINK_ERROR_CONFIG);
     CHECK(can_link_error_count == 1U && config_calls == 0U && start_calls == 0U);
-    CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot); CanLink_Poll();
+    InitLegacyProviders(ReadStatus,RequestStop,CheckTargets,ReadBoot); CanLink_Poll();
     CHECK(can_link_error_count == 1U && receive_calls == 0U && start_calls == 0U);
 }
 static void InitFailure(unsigned step)
 {
     fail_init_at = step;
-    CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot);
+    InitLegacyProviders(ReadStatus,RequestStop,CheckTargets,ReadBoot);
     CHECK(can_link_diag.state == 2U && can_link_diag.error_flags == CAN_LINK_ERROR_INIT);
     CHECK(can_link_error_count == 1U);
     CHECK(config_calls == 1U && global_calls == (step >= 2U));
     CHECK(blocking_calls == (step >= 3U) && start_calls == (step >= 4U));
     fail_init_at = 0U;
-    CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot); CanLink_Poll();
+    InitLegacyProviders(ReadStatus,RequestStop,CheckTargets,ReadBoot); CanLink_Poll();
     CHECK(config_calls == 1U && receive_calls == 0U && can_link_diag.state == 2U);
 }
 
@@ -474,10 +529,10 @@ static void QueueQuery(uint8_t opcode, uint8_t token)
 static void QueryValid(void)
 {
     static const uint8_t expected[][8]={
-        {0x52U,0x01U,0x01U,0xA5U,0xFFU,0x01U,0x01U,0U},
+        {0x52U,0x01U,0x01U,0xA5U,0xFFU,0x03U,0x01U,0U},
         {0x52U,0x01U,0x02U,0xA6U,0x05U,0x19U,0xCDU,0xABU},
         {0x52U,0x01U,0x03U,0xA7U,0xEFU,0xBEU,0xADU,0xDEU},
-        {0x52U,0x01U,0x04U,0xA8U,0x06U,0x08U,0U,0U}
+        {0x52U,0x01U,0x04U,0xA8U,0x17U,0x08U,0U,0U}
     };
     static const unsigned reads[]={0U,1U,2U,2U};
     CanLinkReadStatus before;
@@ -535,7 +590,7 @@ static void QueryRejects(void)
         case 1: incoming_data[1]=0U; break;
         case 2: incoming_data[1]=2U; break;
         case 3: incoming_data[2]=0U; break;
-        case 4: incoming_data[2]=12U; break; /* Unknown query */
+        case 4: incoming_data[2]=13U; break; /* Unknown query */
         case 5: incoming_data[2]=0xFFU; break;
         case 6: incoming_data[4]=1U; break;
         case 7: incoming_data[5]=2U; break;
@@ -610,11 +665,11 @@ static void QueryBusOff(void)
 }
 static void NoProvider(void)
 {
-    CanLink_Init(NULL,RequestStop,CheckTargets,ReadBoot);
+    InitLegacyProviders(NULL,RequestStop,CheckTargets,ReadBoot);
     CHECK(can_link_diag.state==2U);
     CHECK(can_link_error_count==1U && can_link_diag.error_flags==CAN_LINK_ERROR_CONFIG);
     CHECK(config_calls==0U && start_calls==0U);
-    CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot);
+    InitLegacyProviders(ReadStatus,RequestStop,CheckTargets,ReadBoot);
     QueueQuery(2U,0U); CanLink_Poll();
     CHECK(can_link_error_count==1U && can_link_diag.state==2U);
     CHECK(receive_calls==0U && send_calls==0U && status_reads==0U);
@@ -765,9 +820,9 @@ static void StopUnavailable(int busoff)
 }
 static void NoStopProvider(void)
 {
-    CanLink_Init(ReadStatus,NULL,CheckTargets,ReadBoot);
+    InitLegacyProviders(ReadStatus,NULL,CheckTargets,ReadBoot);
     CHECK(can_link_diag.state==2U && can_link_diag.error_flags==CAN_LINK_ERROR_CONFIG);
-    CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot);
+    InitLegacyProviders(ReadStatus,RequestStop,CheckTargets,ReadBoot);
     QueueStop(1U); CanLink_Poll();
     CHECK(can_link_error_count==1U && config_calls==0U && stop_calls==0U);
 }
@@ -930,9 +985,9 @@ static void TargetFailure(unsigned mode)
 }
 static void TargetMissing(void)
 {
-    CanLink_Init(ReadStatus,RequestStop,NULL,ReadBoot);
+    InitLegacyProviders(ReadStatus,RequestStop,NULL,ReadBoot);
     CHECK(can_link_diag.state==2U && can_link_diag.error_flags==CAN_LINK_ERROR_CONFIG);
-    CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot);
+    InitLegacyProviders(ReadStatus,RequestStop,CheckTargets,ReadBoot);
     QueueTarget(0U,0U,0U);CanLink_Poll();
     CHECK(config_calls==0U && target_calls==0U && send_calls==0U);
     CHECK(can_link_error_count==1U);
@@ -1055,7 +1110,7 @@ static void BootRejects(void)
             case 7:incoming_data[1]=0U;break;
             case 8:incoming_data[1]=2U;break;
             case 9:incoming_data[2]=0U;break;
-            case 10:incoming_data[2]=12U;break;
+            case 10:incoming_data[2]=13U;break;
             case 11:incoming_data[2]=255U;break;
             default:incoming_data[i-8U]=0x80U;break;
             }
@@ -1120,9 +1175,9 @@ static void BootFailure(unsigned mode)
 }
 static void BootMissing(void)
 {
-    CanLink_Init(ReadStatus,RequestStop,CheckTargets,NULL);
+    InitLegacyProviders(ReadStatus,RequestStop,CheckTargets,NULL);
     CHECK(can_link_diag.state==2U && can_link_diag.error_flags==CAN_LINK_ERROR_CONFIG);
-    CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot);
+    InitLegacyProviders(ReadStatus,RequestStop,CheckTargets,ReadBoot);
     QueueQuery(5U,0U);CanLink_Poll();
     CHECK(config_calls==0U && start_calls==0U && receive_calls==0U && send_calls==0U);
     CHECK(boot_reads==0U && status_reads==0U && can_link_error_count==1U);
@@ -1259,7 +1314,7 @@ static void TimeSticky(unsigned zero_counter)
     CHECK((cleared_flags&FDCAN_IR_TOO)==0U);
     if(!zero_counter)CHECK((host_can_registers.IR&FDCAN_IR_TOO)!=0U);
     host_can_registers.IR=0U;host_can_registers.TOCV=6250U;
-    CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot);
+    InitLegacyProviders(ReadStatus,RequestStop,CheckTargets,ReadBoot);
     QueueQuery(11U,3U);SetFrameClock(3U,3U);CanLink_Poll();ExpectTime(11U,3U,UINT32_MAX);
     CheckTimeLost(CAN_TIME_LOSS_TIMEOUT);
     CHECK(timeout_resets==resets && timestamp_resets==1U && start_calls==1U);
@@ -1285,11 +1340,11 @@ static void TimeWatch(void)
 static void TimeInitFailure(unsigned step)
 {
     unsigned calls,resets;
-    fail_time_at=step;CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot);
+    fail_time_at=step;InitLegacyProviders(ReadStatus,RequestStop,CheckTargets,ReadBoot);
     CHECK(can_link_diag.state==1U && start_calls==1U && can_link_error_count==0U);
     CHECK(time_init_calls==step);CheckTimeLost(CAN_TIME_LOSS_HAL);
     calls=time_init_calls;resets=timeout_resets;
-    fail_time_at=0U;CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot);
+    fail_time_at=0U;InitLegacyProviders(ReadStatus,RequestStop,CheckTargets,ReadBoot);
     Queue(8U,0U,1U);CanLink_Poll();CHECK(can_link_rx_count==1U && send_calls==1U);
     QueueQuery(10U,0U);CanLink_Poll();ExpectTime(10U,0U,2U);
     CHECK(time_init_calls==calls && timeout_resets==resets && start_calls==1U);
@@ -1297,7 +1352,7 @@ static void TimeInitFailure(unsigned step)
 }
 static void TimeBadEffect(unsigned step)
 {
-    bad_time_at=step;CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot);
+    bad_time_at=step;InitLegacyProviders(ReadStatus,RequestStop,CheckTargets,ReadBoot);
     CHECK(can_link_diag.state==1U && start_calls==1U && time_init_calls==6U);
     CHECK((can_link_time_diag.reason_flags&CAN_TIME_LOSS_CONFIG)!=0U);
     CHECK(can_link_time_diag.state==CAN_TIME_LOST && can_link_error_count==0U);
@@ -1308,7 +1363,7 @@ static void TimeInitBoundary(unsigned mode)
     if(mode==0U)host_can_registers.IR=FDCAN_IR_TOO;
     else if(mode==1U)host_can_registers.RXF0S=1U;
     else { time_hook_site=TIME_HOOK_START;time_hook_action=1U; }
-    CanLink_Init(ReadStatus,RequestStop,CheckTargets,ReadBoot);
+    InitLegacyProviders(ReadStatus,RequestStop,CheckTargets,ReadBoot);
     CHECK(can_link_diag.state==1U && start_calls==1U && time_init_calls==6U);
     CheckTimeLost(mode==1U?CAN_TIME_LOSS_CONFIG:CAN_TIME_LOSS_TIMEOUT);
     if(mode==2U)CHECK(time_hook_fired==1U);
@@ -1447,10 +1502,464 @@ static void StopTimeCompatible(void)
     observed_status.stop_applied_ticket=41U;
     QueueStop(1U);CanLink_Poll();ExpectStop(1U,2U);CHECK(stop_calls==1U);
     QueueTarget(2U,100U,1000U);CanLink_Poll();ExpectTarget(1U);
-    QueueQuery(4U,3U);CanLink_Poll();ExpectTime(4U,3U,0x806U);
+    QueueQuery(4U,3U);CanLink_Poll();ExpectTime(4U,3U,0x817U);
     QueueQuery(10U,4U);CanLink_Poll();ExpectTime(10U,4U,2U);
     CHECK(target_calls==1U && can_link_error_count==0U && timeout_resets==1U);
     CheckTimeLost(CAN_TIME_LOSS_TIMEOUT);
+}
+
+static void TxnWords(uint32_t words[8],uint32_t id,uint32_t opcode,uint32_t ttl)
+{
+    unsigned i;
+    words[0]=id;for(i=0U;i<4U;++i)words[i+1U]=boot_words[i];
+    words[5]=use_core?real_core.run_epoch:observed_status.run_epoch;
+    words[6]=0x01F4FF9CU; /* -100 rpm / 500 mA, both in one immutable word. */
+    words[7]=(ttl<<16U)|opcode;
+}
+static void QueueTransaction(uint8_t page,uint8_t token,uint32_t value,uint32_t now,uint32_t stamp)
+{
+    unsigned i;
+    Queue(8U,0U,1U);SetFrameClock(now,stamp);
+    incoming_data[0]=0x43U;incoming_data[1]=2U;incoming_data[2]=page;incoming_data[3]=token;
+    for(i=0U;i<4U;++i)incoming_data[4U+i]=(uint8_t)(value>>(i*8U));
+}
+static void SendTransaction(uint8_t page,uint8_t token,uint32_t value,uint32_t now,uint32_t stamp)
+{
+    QueueTransaction(page,token,value,now,stamp);CanLink_Poll();
+}
+static void ExpectTransaction(uint32_t id,uint8_t phase,uint8_t detail)
+{
+    CHECK(sent_header.Identifier==0x322U && sent_header.DataLength==FDCAN_DLC_BYTES_8);
+    CHECK(sent_data[0]==0x41U && sent_data[1]==2U && sent_data[2]==phase && sent_data[3]==detail);
+    CHECK(sent_data[4]==(uint8_t)id && sent_data[5]==(uint8_t)(id>>8U) &&
+          sent_data[6]==(uint8_t)(id>>16U) && sent_data[7]==(uint8_t)(id>>24U));
+}
+static void StageTransaction(const uint32_t words[8],uint8_t token,uint32_t now,uint32_t origin,unsigned last)
+{
+    unsigned i;
+    for(i=0U;i<=last;++i) {
+        SendTransaction((uint8_t)(0x30U+i),token,words[i],now,i==0U?origin:now);
+        ExpectTransaction(words[0],1U,(uint8_t)(0x31U+i));
+    }
+}
+static void CommitTransactionHost(const uint32_t words[8],uint8_t token,uint32_t now)
+{
+    SendTransaction(0x38U,token,CanLinkProtocol_TransactionCrc32(words),now,now);
+}
+static void QueryTransaction(uint32_t id,uint32_t now)
+{
+    SendTransaction(0x39U,0xE7U,id,now,now);
+}
+static void TxnValid(void)
+{
+    uint32_t words[8];unsigned i;
+    Ready();TxnWords(words,0x01020304U,1U,1000U);
+    StageTransaction(words,0U,120U,100U,7U);CommitTransactionHost(words,0U,130U);
+    ExpectTransaction(words[0],2U,0U);
+    CHECK(submit_calls==1U && receipt_reads==0U);
+    CHECK(submitted_command.run_epoch==1U && submitted_command.opcode==1U);
+    CHECK(submitted_command.speed_rpm==-100 && submitted_command.iq_limit_ma==500U);
+    CHECK(submitted_command.ttl_ms==1000U && submitted_command.begin_timestamp==100U);
+    QueryTransaction(words[0],150U);ExpectTransaction(words[0],2U,0U);
+    CHECK(receipt_reads!=0U && submit_calls==1U);
+    CommitTransactionHost(words,0U,200U);ExpectTransaction(words[0],2U,0U);
+    observed_receipt.command_seq=71U;observed_receipt.result=AXIS_CMD_APPLIED;observed_receipt.control_seq=23U;
+    QueryTransaction(words[0],220U);ExpectTransaction(words[0],3U,14U);
+    for(i=0U;i<8U;++i) {
+        SendTransaction((uint8_t)(0x30U+i),0U,words[i],300U+i,300U+i);
+        ExpectTransaction(words[0],3U,14U);
+    }
+    CommitTransactionHost(words,0U,320U);ExpectTransaction(words[0],3U,14U);
+    SendTransaction(0x36U,0U,words[6]^1U,321U,321U);ExpectTransaction(words[0],4U,2U);
+    QueryTransaction(words[0],322U);ExpectTransaction(words[0],3U,14U);
+    CHECK(submit_calls==1U && submitted_command.begin_timestamp==100U);
+    CHECK(target_calls==0U && stop_calls==0U && can_link_error_count==0U);
+}
+static void TxnMissingProvider(unsigned missing)
+{
+    CanLinkProviders providers=HostProviders();
+    switch(missing) {
+    case 0U:providers.read_status=NULL;break;
+    case 1U:providers.request_stop=NULL;break;
+    case 2U:providers.check_targets=NULL;break;
+    case 3U:providers.read_boot_identity=NULL;break;
+    case 4U:providers.submit_command=NULL;break;
+    case 5U:providers.read_receipt=NULL;break;
+    case 6U:break;
+    default:CHECK(0);break;
+    }
+    CanLink_Init(missing==6U?NULL:&providers);
+    CHECK(can_link_diag.state==2U && can_link_diag.error_flags==CAN_LINK_ERROR_CONFIG);
+    CHECK(can_link_error_count==1U && start_calls==0U && config_calls==0U);
+    providers=HostProviders();CanLink_Init(&providers);
+    SendTransaction(0x30U,0U,1U,0U,0U);
+    CHECK(receive_calls==0U && submit_calls==0U && receipt_reads==0U);
+}
+static void TxnEpochQuery(void)
+{
+    CanLinkProviders providers=HostProviders();unsigned i;
+    static const uint32_t epoch[]={0U,1U,0x89ABCDEFU,UINT32_MAX};
+    CanLink_Init(&providers);memset(&providers,0,sizeof(providers));
+    for(i=0U;i<4U;++i) {
+        observed_status.run_epoch=epoch[i];QueueQuery(12U,(uint8_t)i);CanLink_Poll();
+        ExpectTime(12U,(uint8_t)i,epoch[i]);
+    }
+    CHECK(status_reads==4U && submit_calls==0U && receipt_reads==0U);
+    CHECK(can_query_rx_count==4U && can_link_error_count==0U);
+}
+static void TxnOrder(unsigned mode)
+{
+    uint32_t words[8],other[8];unsigned i;
+    Ready();TxnWords(words,1U,1U,1000U);TxnWords(other,2U,1U,1000U);
+    if(mode==0U) {
+        SendTransaction(0x38U,5U,0U,0U,0U);CHECK(send_calls==0U && submit_calls==0U);
+        StageTransaction(words,5U,1U,1U,1U);
+        SendTransaction(0x33U,5U,words[3],2U,2U);ExpectTransaction(1U,4U,1U);
+        QueryTransaction(1U,3U);ExpectTransaction(1U,4U,1U);
+    } else if(mode==1U) {
+        StageTransaction(words,5U,0U,0U,2U);
+        SendTransaction(0x31U,5U,words[1],1U,1U);ExpectTransaction(1U,1U,0x33U);
+        SendTransaction(0x30U,5U,1U,2U,2U);ExpectTransaction(1U,1U,0x33U);
+        for(i=3U;i<8U;++i)SendTransaction((uint8_t)(0x30U+i),5U,words[i],3U,3U);
+        CommitTransactionHost(words,5U,4U);ExpectTransaction(1U,2U,0U);
+        CHECK(submit_calls==1U && submitted_command.begin_timestamp==0U);
+    } else if(mode==2U) {
+        StageTransaction(words,5U,0U,0U,2U);
+        SendTransaction(0x31U,5U,words[1]^1U,1U,1U);ExpectTransaction(1U,4U,2U);
+        QueryTransaction(1U,2U);ExpectTransaction(1U,4U,2U);
+    } else if(mode==3U) {
+        StageTransaction(words,5U,0U,0U,1U);
+        SendTransaction(0x32U,6U,words[2],1U,1U);ExpectTransaction(1U,4U,2U);
+        QueryTransaction(1U,2U);ExpectTransaction(1U,1U,0x32U);
+        for(i=2U;i<8U;++i)SendTransaction((uint8_t)(0x30U+i),5U,words[i],3U,3U);
+        CommitTransactionHost(words,5U,4U);ExpectTransaction(1U,2U,0U);CHECK(submit_calls==1U);
+    } else if(mode==4U) {
+        StageTransaction(words,5U,0U,0U,1U);
+        SendTransaction(0x30U,6U,2U,1U,1U);ExpectTransaction(2U,5U,0U);
+        QueryTransaction(1U,2U);ExpectTransaction(1U,1U,0x32U);
+        SendTransaction(0x30U,6U,1U,2U,2U);ExpectTransaction(1U,4U,2U);
+        QueryTransaction(1U,2U);ExpectTransaction(1U,1U,0x32U);
+    } else if(mode==5U) {
+        StageTransaction(words,5U,0U,0U,6U);
+        SendTransaction(0x38U,5U,CanLinkProtocol_TransactionCrc32(words),1U,1U);
+        ExpectTransaction(1U,4U,1U);QueryTransaction(1U,2U);ExpectTransaction(1U,4U,1U);
+    } else CHECK(0);
+    if(mode!=1U && mode!=3U)CHECK(submit_calls==0U);
+    CHECK(can_link_error_count==0U && target_calls==0U);
+}
+static void TxnReject(unsigned mode)
+{
+    uint32_t words[8],crc;uint8_t error=0U;unsigned i,last=7U;
+    Ready();TxnWords(words,1U,1U,1000U);
+    if(mode>=1U && mode<=4U)words[mode]^=1U;
+    if(mode==5U) {words[5]=2U;error=4U;last=4U;}
+    if(mode==6U) {words[7]=1U;error=6U;last=6U;}
+    if(mode==7U) {words[7]=(1001U<<16U)|1U;error=6U;last=6U;}
+    if(mode==8U) {words[7]|=0x100U;error=11U;last=6U;}
+    if(mode==9U) {words[7]=(1000U<<16U)|3U;error=11U;last=6U;}
+    if(mode==10U) {boot_state=2U;error=3U;}
+    if(mode==11U) {observed_status.fault_mask=1U;error=9U;}
+    if(mode==12U) {observed_status.run_epoch=0U;error=4U;}
+    if(mode>=10U && mode<=12U) {
+        SendTransaction(0x30U,1U,1U,0U,0U);ExpectTransaction(1U,4U,error);
+    } else {
+        StageTransaction(words,1U,0U,0U,last);
+        if(mode>=5U && mode<=9U) {
+            i=last+1U;SendTransaction((uint8_t)(0x30U+i),1U,words[i],0U,0U);
+            ExpectTransaction(1U,4U,error);
+        } else {
+            if(mode==13U)boot_state=0U;
+            if(mode==14U)observed_status.fault_mask=1U;
+            if(mode==15U)observed_status.run_epoch=2U;
+            crc=CanLinkProtocol_TransactionCrc32(words);if(mode==0U)crc^=1U;
+            SendTransaction(0x38U,1U,crc,1U,1U);
+            error=(mode==0U?5U:mode==14U?9U:mode==15U?4U:3U);
+            ExpectTransaction(1U,4U,error);
+        }
+        QueryTransaction(1U,2U);ExpectTransaction(1U,4U,error);
+        if(mode==14U || mode==15U) {
+            SendTransaction(0x38U,1U,CanLinkProtocol_TransactionCrc32(words)^1U,3U,3U);
+            ExpectTransaction(1U,4U,2U);QueryTransaction(1U,4U);ExpectTransaction(1U,4U,error);
+        }
+    }
+    CHECK(submit_calls==0U && target_calls==0U && can_link_error_count==0U);
+}
+static void TxnMetadata(void)
+{
+    uint32_t words[8];unsigned i,before;
+    Ready();TxnWords(words,1U,1U,1000U);StageTransaction(words,1U,0U,0U,1U);
+    for(i=0U;i<9U;++i) {
+        QueueTransaction(0x32U,1U,words[2],1U,1U);before=send_calls;
+        switch(i) {
+        case 0U:incoming.Identifier=0x322U;break;
+        case 1U:incoming.IdType=1U;break;
+        case 2U:incoming.RxFrameType=1U;break;
+        case 3U:incoming.FDFormat=1U;break;
+        case 4U:incoming.BitRateSwitch=1U;break;
+        case 5U:incoming_data[0]=0U;break;
+        case 6U:incoming_data[1]=1U;break;
+        case 7U:incoming_data[2]=0x3AU;break;
+        default:host_message_ram[2U]=15U<<16U;break;
+        }
+        CanLink_Poll();CHECK(send_calls==before && submit_calls==0U);
+        QueryTransaction(1U,2U);ExpectTransaction(1U,1U,0x32U);
+    }
+    for(i=2U;i<8U;++i)SendTransaction((uint8_t)(0x30U+i),1U,words[i],3U,3U);
+    CommitTransactionHost(words,1U,4U);ExpectTransaction(1U,2U,0U);CHECK(submit_calls==1U);
+}
+static void TxnLifetime(unsigned mode)
+{
+    uint32_t words[8];unsigned i;uint32_t origin=mode==4U?65520U:100U;
+    Ready();TxnWords(words,1U,1U,mode==2U?1000U:1U);
+    StageTransaction(words,0U,origin,origin,6U);
+    if(mode==0U) {
+        SendTransaction(0x37U,0U,words[7],130U,130U);ExpectTransaction(1U,1U,0x38U);
+        CommitTransactionHost(words,0U,130U);ExpectTransaction(1U,2U,0U);CHECK(submit_calls==1U);
+    } else if(mode==1U) {
+        SendTransaction(0x37U,0U,words[7],131U,131U);ExpectTransaction(1U,4U,6U);
+    } else if(mode==2U) {
+        SendTransaction(0x30U,0U,1U,31349U,31349U);ExpectTransaction(1U,1U,0x37U);
+        QueryTransaction(1U,31350U);ExpectTransaction(1U,4U,6U);
+    } else if(mode==3U) {
+        SendTransaction(0x37U,0U,words[7],120U,120U);ExpectTransaction(1U,1U,0x38U);
+        SendTransaction(0x30U,0U,1U,130U,130U);ExpectTransaction(1U,1U,0x38U);
+        CommitTransactionHost(words,0U,131U);ExpectTransaction(1U,4U,6U);
+    } else if(mode==4U) {
+        SendTransaction(0x37U,0U,words[7],14U,14U);ExpectTransaction(1U,1U,0x38U);
+        CommitTransactionHost(words,0U,14U);ExpectTransaction(1U,2U,0U);CHECK(submit_calls==1U);
+        CHECK(submitted_command.begin_timestamp==65520U);
+    } else if(mode==5U) {
+        host_can_registers.IR=FDCAN_IR_TOO;
+        QueryTransaction(1U,101U);ExpectTransaction(1U,4U,7U);
+        host_can_registers.IR=0U;can_link_time_diag.state=CAN_TIME_TRACKING;
+        QueryTransaction(1U,102U);ExpectTransaction(1U,4U,7U);
+    } else if(mode==6U) {
+        /* Latest fragment is fresh, but original BEGIN is already too old. */
+        SendTransaction(0x37U,0U,words[7],150U,150U);ExpectTransaction(1U,4U,6U);
+        CommitTransactionHost(words,0U,151U);ExpectTransaction(1U,4U,6U);
+        SendTransaction(0x38U,0U,CanLinkProtocol_TransactionCrc32(words)^1U,151U,151U);
+        ExpectTransaction(1U,4U,2U);
+        QueryTransaction(1U,152U);ExpectTransaction(1U,4U,6U);
+    } else if(mode==7U) {
+        for(i=0U;i<3U;++i) { QueueQuery(1U,0U);SetFrameClock(130U,130U);CanLink_Poll(); }
+        SendTransaction(0x37U,0U,words[7],131U,131U);ExpectTransaction(1U,4U,6U);
+    } else CHECK(0);
+    if(mode!=0U && mode!=4U)CHECK(submit_calls==0U);
+    CHECK(target_calls==0U);
+}
+static void TxnTxLoss(unsigned fail)
+{
+    uint32_t words[8];unsigned sends;
+    Ready();TxnWords(words,1U,1U,1000U);StageTransaction(words,1U,0U,0U,7U);
+    sends=send_calls;if(fail)send_result=HAL_ERROR;else fifo_free=0U;
+    CommitTransactionHost(words,1U,1U);CHECK(submit_calls==1U);
+    CHECK(send_calls==sends+(fail?1U:0U));
+    observed_receipt.command_seq=71U;observed_receipt.result=AXIS_CMD_APPLIED;
+    send_result=HAL_OK;fifo_free=32U;QueryTransaction(1U,2U);ExpectTransaction(1U,3U,14U);
+    CommitTransactionHost(words,1U,3U);ExpectTransaction(1U,3U,14U);
+    CHECK(submit_calls==1U && can_link_error_count==1U && can_link_time_diag.state==CAN_TIME_TRACKING);
+}
+static void TxnSubmitResult(unsigned mode)
+{
+    uint32_t words[8];uint8_t phase=3U,detail=AXIS_CMD_INVALID;
+    Ready();TxnWords(words,1U,1U,1000U);
+    if(mode==0U) {submit_result=AXIS_CMD_OK;submit_seq=0U;phase=4U;detail=10U;}
+    if(mode==1U) {submit_result=17U;submit_seq=0U;phase=4U;detail=10U;}
+    if(mode==2U) {submit_result=AXIS_CMD_INVALID;submit_seq=71U;phase=4U;detail=10U;}
+    if(mode==3U) {submit_result=AXIS_CMD_INVALID;submit_seq=0U;}
+    if(mode==4U) {submit_result=AXIS_CMD_CONFIG_UNSET;submit_seq=0U;detail=AXIS_CMD_CONFIG_UNSET;}
+    StageTransaction(words,1U,0U,0U,7U);CommitTransactionHost(words,1U,1U);
+    ExpectTransaction(1U,phase,detail);CHECK(submit_calls==1U);
+    QueryTransaction(1U,2U);ExpectTransaction(1U,phase,detail);
+    CommitTransactionHost(words,1U,3U);ExpectTransaction(1U,phase,detail);CHECK(submit_calls==1U);
+    CHECK(can_link_error_count==(mode<=2U?1U:0U));
+    CHECK(can_link_time_diag.state==(mode<=2U?CAN_TIME_LOST:CAN_TIME_TRACKING));
+}
+static void TxnReceiptFailure(unsigned mode)
+{
+    uint32_t words[8];
+    Ready();TxnWords(words,1U,1U,1000U);StageTransaction(words,1U,0U,0U,7U);
+    CommitTransactionHost(words,1U,1U);ExpectTransaction(1U,2U,0U);
+    if(mode==0U)receipt_success=0U;
+    if(mode==1U)receipt_success=2U;
+    if(mode==2U) {observed_receipt.command_seq=71U;observed_receipt.result=0U;}
+    if(mode==3U) {observed_receipt.command_seq=71U;observed_receipt.result=17U;}
+    if(mode==4U) {observed_receipt.command_seq=72U;observed_receipt.result=14U;}
+    if(mode==5U) {observed_receipt.command_seq=70U;observed_receipt.result=14U;}
+    QueryTransaction(1U,2U);ExpectTransaction(1U,mode==5U?2U:4U,mode==5U?0U:10U);
+    CHECK(submit_calls==1U && can_link_error_count==(mode==5U?0U:1U));
+    CHECK(can_link_time_diag.state==(mode==5U?CAN_TIME_TRACKING:CAN_TIME_LOST));
+}
+static void TxnCache(void)
+{
+    uint32_t first[8],second[8];
+    Ready();TxnWords(first,1U,1U,1000U);StageTransaction(first,1U,0U,0U,7U);
+    CommitTransactionHost(first,1U,1U);ExpectTransaction(1U,2U,0U);
+    TxnWords(second,2U,2U,1000U);
+    SendTransaction(0x30U,2U,2U,2U,2U);ExpectTransaction(2U,5U,0U);
+    observed_receipt.command_seq=71U;observed_receipt.result=14U;
+    StageTransaction(second,2U,3U,3U,7U);
+    QueryTransaction(1U,4U);ExpectTransaction(1U,3U,14U);
+    submit_seq=72U;CommitTransactionHost(second,2U,5U);ExpectTransaction(2U,2U,0U);
+    observed_receipt.command_seq=72U;observed_receipt.result=14U;
+    QueryTransaction(2U,6U);ExpectTransaction(2U,3U,14U);
+    QueryTransaction(1U,7U);ExpectTransaction(1U,6U,0U);
+    SendTransaction(0x30U,1U,1U,8U,8U);ExpectTransaction(1U,6U,0U);
+    QueryTransaction(0U,9U);ExpectTransaction(0U,7U,0U);
+    QueryTransaction(3U,9U);ExpectTransaction(3U,7U,0U);
+    CHECK(submit_calls==2U && can_link_error_count==0U);
+}
+static void TxnMaximumId(void)
+{
+    uint32_t words[8];unsigned sends;
+    Ready();TxnWords(words,UINT32_MAX,1U,1000U);StageTransaction(words,255U,0U,0U,7U);
+    CommitTransactionHost(words,255U,1U);ExpectTransaction(UINT32_MAX,2U,0U);
+    observed_receipt.command_seq=71U;observed_receipt.result=14U;
+    QueryTransaction(UINT32_MAX,2U);ExpectTransaction(UINT32_MAX,3U,14U);
+    SendTransaction(0x30U,0U,1U,3U,3U);ExpectTransaction(1U,6U,0U);
+    sends=send_calls;SendTransaction(0x30U,0U,0U,3U,3U);CHECK(send_calls==sends);
+    CHECK(submit_calls==1U);
+}
+static void TxnCore(unsigned mode)
+{
+    uint32_t words[8],next[8],first_seq;
+    AxisCommandCore before;
+    Ready();use_core=1U;AxisCommand_Init(&real_core,&target_limits);
+    TxnWords(words,1U,1U,1000U);StageTransaction(words,1U,0U,0U,7U);
+    CommitTransactionHost(words,1U,1U);ExpectTransaction(1U,2U,0U);
+    first_seq=real_core.last_accepted_seq;CHECK(first_seq!=0U && real_core.pending_ready==1U);
+    if(mode==0U) {
+        AxisCommand_Tick(&real_core,txn_core_now,0U,1U);
+        QueryTransaction(1U,2U);ExpectTransaction(1U,3U,14U);
+        txn_core_now=2U;TxnWords(next,2U,2U,1000U);next[6]=0x03E80064U;
+        StageTransaction(next,2U,3U,3U,7U);CommitTransactionHost(next,2U,4U);
+        ExpectTransaction(2U,2U,0U);CHECK(real_core.active.command_seq==first_seq);
+        AxisCommand_Tick(&real_core,2U,0U,1U);QueryTransaction(2U,5U);ExpectTransaction(2U,3U,14U);
+        CHECK(real_core.active.speed_target_rpm==100.0f && real_core.active.iq_limit_a==1.0f);
+        before=real_core;CommitTransactionHost(next,2U,6U);ExpectTransaction(2U,3U,14U);
+        CHECK(memcmp(&before,&real_core,sizeof(before))==0 && submit_calls==2U);
+    } else if(mode==1U) {
+        QueueStop(1U);CanLink_Poll();ExpectStop(1U,1U);
+        AxisCommand_Tick(&real_core,1U,0U,1U);QueryTransaction(1U,2U);ExpectTransaction(1U,3U,AXIS_CMD_STOPPED);
+        CHECK(real_core.pending_ready==0U && real_core.active_valid==0U && submit_calls==1U);
+    } else if(mode==2U) {
+        AxisCommand_Tick(&real_core,1U,0U,1U);QueryTransaction(1U,2U);ExpectTransaction(1U,3U,14U);
+        txn_core_now=2U;TxnWords(next,2U,2U,1000U);StageTransaction(next,2U,3U,3U,7U);
+        CommitTransactionHost(next,2U,4U);ExpectTransaction(2U,2U,0U);
+        QueueStop(1U);CanLink_Poll();AxisCommand_Tick(&real_core,2U,0U,1U);
+        CHECK(real_core.result_seq==first_seq && real_core.cancelled_seq!=first_seq);
+        QueryTransaction(2U,5U);ExpectTransaction(2U,3U,AXIS_CMD_STOPPED);
+    } else if(mode==3U) {
+        AxisCommand_Tick(&real_core,1U,0U,1U);QueryTransaction(1U,2U);ExpectTransaction(1U,3U,14U);
+        AxisCommand_Tick(&real_core,1001U,0U,1U);
+        QueryTransaction(1U,32000U);ExpectTransaction(1U,3U,14U);
+        CHECK(real_core.active_valid==0U);QueueStop(1U);CanLink_Poll();
+        QueryTransaction(1U,32001U);ExpectTransaction(1U,3U,14U);CHECK(submit_calls==1U);
+    } else if(mode==4U) {
+        AxisCommand_Tick(&real_core,1U,0U,0U);QueryTransaction(1U,2U);
+        ExpectTransaction(1U,3U,AXIS_CMD_NOT_READY);CHECK(real_core.active_valid==0U);
+    } else if(mode==5U) {
+        /* Reproduce the control/CAN consequence, without pretending that this
+         * core fixture exercises the real resolver-publication timing. */
+        AxisCommand_Tick(&real_core,1U,0U,1U);
+        QueryTransaction(1U,2U);ExpectTransaction(1U,3U,AXIS_CMD_APPLIED);
+        TxnWords(next,2U,2U,1000U);CHECK(next[5]==1U);
+        AxisCommand_Tick(&real_core,2U,0U,0U); /* One not-ready control iteration. */
+        CHECK(real_core.result==AXIS_CMD_NOT_READY && real_core.run_epoch==2U);
+        CHECK(real_core.active_valid==0U && real_core.pending_ready==0U && real_core.fault_latched==0U);
+        AxisCommand_Tick(&real_core,3U,0U,1U); /* Recovery is not a new START. */
+        CHECK(real_core.active_valid==0U && real_core.pending_ready==0U && real_core.run_epoch==2U);
+        QueryTransaction(1U,3U);ExpectTransaction(1U,3U,AXIS_CMD_APPLIED);
+        StageTransaction(next,2U,4U,4U,4U);
+        SendTransaction(0x35U,2U,next[5],5U,5U);ExpectTransaction(2U,4U,CAN_TXN_ERR_EPOCH);
+        QueryTransaction(2U,6U);ExpectTransaction(2U,4U,CAN_TXN_ERR_EPOCH);
+        CHECK(submit_calls==1U && real_core.last_accepted_seq==first_seq);
+        CHECK(real_core.active_valid==0U && real_core.pending_ready==0U && real_core.result==AXIS_CMD_NOT_READY);
+        CHECK(real_core.receipt.command_seq==first_seq && real_core.receipt.result==AXIS_CMD_APPLIED);
+        CHECK(real_core.run_epoch==2U && observed_status.fault_mask==0U && can_link_time_diag.state==CAN_TIME_TRACKING);
+    } else CHECK(0);
+}
+static void StopTxnStaging(void)
+{
+    uint32_t words[8];
+    Ready();TxnWords(words,1U,1U,1000U);StageTransaction(words,1U,0U,0U,3U);
+    QueueStop(1U);CanLink_Poll();ExpectStop(1U,1U);
+    QueryTransaction(1U,1U);ExpectTransaction(1U,4U,8U);
+    SendTransaction(0x30U,2U,2U,2U,2U);ExpectTransaction(2U,4U,8U);
+    observed_status.stop_applied_ticket=41U;observed_status.run_epoch=2U;
+    TxnWords(words,2U,1U,1000U);StageTransaction(words,2U,3U,3U,7U);
+    CommitTransactionHost(words,2U,4U);ExpectTransaction(2U,2U,0U);
+    CHECK(submit_calls==1U && submitted_command.run_epoch==2U && stop_calls==1U);
+}
+static void TxnLeaseFast(void)
+{
+    /* Corrupt and restore after Ready(), on every call: an Init-only cached
+     * configuration verdict would incorrectly pass these cases. */
+    struct RegisterMutation { volatile uint32_t *reg;uint32_t mask; } mutations[]={
+        {&host_can_registers.NBTP,1U<<FDCAN_NBTP_NBRP_Pos},
+        {&host_can_registers.NBTP,1U<<FDCAN_NBTP_NSJW_Pos},
+        {&host_can_registers.NBTP,1U<<FDCAN_NBTP_NTSEG1_Pos},
+        {&host_can_registers.NBTP,1U<<FDCAN_NBTP_NTSEG2_Pos},
+        {&host_can_registers.TSCC,1U<<FDCAN_TSCC_TCP_Pos},
+        {&host_can_registers.TSCC,FDCAN_TSCC_TSS},
+        {&host_can_registers.TOCC,1U<<FDCAN_TOCC_TOP_Pos},
+        {&host_can_registers.TOCC,1U<<FDCAN_TOCC_TOS_Pos},
+        {&host_can_registers.TOCC,FDCAN_TOCC_ETOC},
+        {&host_can_registers.IE,1U},{&host_can_registers.ILE,1U},
+        {&host_debug_registers.APB1HFZ1,DBGMCU_APB1HFZ1_DBG_FDCAN},
+        {&host_ccu_registers.CCFG,FDCANCCU_CCFG_BCC},
+        {&host_ccu_registers.CCFG,1U<<FDCANCCU_CCFG_CDIV_Pos},
+        {&host_ccu_registers.CCFG,FDCANCCU_CCFG_SWR},
+        {&host_rcc_registers.D2CCIP1R,1U<<RCC_D2CCIP1R_FDCANSEL_Pos},
+        {&host_can_registers.CCCR,FDCAN_CCCR_INIT},
+        {&host_can_registers.CCCR,FDCAN_CCCR_CSR},
+        {&host_can_registers.CCCR,FDCAN_CCCR_CSA},
+        {&host_can_registers.CCCR,FDCAN_CCCR_MON},
+        {&host_can_registers.CCCR,FDCAN_CCCR_TEST},
+        {&host_can_registers.CCCR,FDCAN_CCCR_ASM},
+        {&host_can_registers.CCCR,FDCAN_CCCR_FDOE},
+        {&host_can_registers.CCCR,FDCAN_CCCR_BRSE},
+        {&host_rcc_registers.CR,RCC_CR_HSERDY},
+        {&host_can_registers.IR,FDCAN_IR_TOO},
+        {&host_can_registers.IR,FDCAN_IR_RF0L},
+        {&host_can_registers.IR,FDCAN_IR_MRAF},
+        {&host_can_registers.IR,FDCAN_IR_WDI},
+        {&host_can_registers.IR,FDCAN_IR_BO}
+    };
+    unsigned reads,resets,i;uint32_t origin=65520U,saved;
+    CHECK(CanLink_LeaseValid(0U,1U)==0U);Ready();reads=kernel_clock_reads;resets=timeout_resets;
+    host_can_registers.TSCV=14U;
+    CHECK(CanLink_LeaseValid(origin,31U)==1U);
+    host_can_registers.TSCV=15U;CHECK(CanLink_LeaseValid(origin,31U)==0U);
+    CHECK(CanLink_LeaseValid(origin,0U)==0U && CanLink_LeaseValid(origin,31251U)==0U);
+    CHECK(CanLink_LeaseValid(65536U,31U)==0U);
+    host_can_registers.TSCV=14U;can_link_time_diag.state=CAN_TIME_LOST;
+    CHECK(CanLink_LeaseValid(origin,31U)==1U);
+    for(i=0U;i<sizeof(mutations)/sizeof(mutations[0]);++i) {
+        saved=*mutations[i].reg;*mutations[i].reg=saved^mutations[i].mask;
+        CHECK(CanLink_LeaseValid(origin,31U)==0U);
+        CHECK(*mutations[i].reg==(saved^mutations[i].mask)); /* No repair/W1C. */
+        *mutations[i].reg=saved;CHECK(CanLink_LeaseValid(origin,31U)==1U);
+    }
+    hfdcan1.Instance=NULL;CHECK(CanLink_LeaseValid(origin,31U)==0U);
+    hfdcan1.Instance=FDCAN1;CHECK(CanLink_LeaseValid(origin,31U)==1U);
+    saved=host_can_registers.TOCV;host_can_registers.TOCV=0U;
+    CHECK(CanLink_LeaseValid(origin,31U)==0U && host_can_registers.TOCV==0U);
+    host_can_registers.TOCV=saved;CHECK(CanLink_LeaseValid(origin,31U)==1U);
+    host_can_registers.IR=FDCAN_IR_PEA|FDCAN_IR_TC;
+    CHECK(CanLink_LeaseValid(origin,31U)==1U && host_can_registers.IR==(FDCAN_IR_PEA|FDCAN_IR_TC));
+    CHECK(kernel_clock_reads==reads && timeout_resets==resets && timestamp_resets==1U && time_init_calls==6U);
+    CHECK(clear_calls==0U && receive_calls==0U && send_calls==0U && fill_calls==0U && free_calls==0U);
+    CHECK(can_link_time_diag.state==CAN_TIME_LOST && can_link_time_diag.reason_flags==0U && can_link_error_count==0U);
+}
+
+static void TxnClearFence(unsigned mode)
+{
+    static const uint32_t flags[]={FDCAN_IR_RF0L,FDCAN_IR_MRAF,FDCAN_IR_WDI,FDCAN_IR_BO,FDCAN_IR_PEA,FDCAN_IR_TC};
+    CHECK(mode<6U);Ready();host_can_registers.TSCV=1U;host_can_registers.IR=flags[mode];
+    clear_lease_probe=1U;CanLink_Poll();CHECK(clear_lease_calls==1U);
+    CHECK(clear_lease_observed==(mode>=4U?1U:0U));
+    CHECK(can_link_time_diag.state==(mode>=4U?CAN_TIME_TRACKING:CAN_TIME_LOST));
 }
 
 int main(int argc, char **argv)
@@ -1522,11 +2031,28 @@ int main(int argc, char **argv)
     else if (!strncmp(argv[1], "time-geometry-",14)) TimeGeometry((unsigned)atoi(argv[1]+14));
     else if (!strncmp(argv[1], "time-edge-",10)) TimeEdges((unsigned)atoi(argv[1]+10));
     else if (!strncmp(argv[1], "time-failure-",13)) TimeRuntimeFailure((unsigned)atoi(argv[1]+13));
+    else if (!strcmp(argv[1], "txn-valid")) TxnValid();
+    else if (!strcmp(argv[1], "txn-epoch")) TxnEpochQuery();
+    else if (!strcmp(argv[1], "txn-metadata")) TxnMetadata();
+    else if (!strcmp(argv[1], "txn-cache")) TxnCache();
+    else if (!strcmp(argv[1], "txn-max-id")) TxnMaximumId();
+    else if (!strcmp(argv[1], "txn-lease")) TxnLeaseFast();
+    else if (!strcmp(argv[1], "stop-txn-staging")) StopTxnStaging();
+    else if (!strncmp(argv[1], "txn-null-",9)) TxnMissingProvider((unsigned)atoi(argv[1]+9));
+    else if (!strncmp(argv[1], "txn-order-",10)) TxnOrder((unsigned)atoi(argv[1]+10));
+    else if (!strncmp(argv[1], "txn-reject-",11)) TxnReject((unsigned)atoi(argv[1]+11));
+    else if (!strncmp(argv[1], "txn-life-",9)) TxnLifetime((unsigned)atoi(argv[1]+9));
+    else if (!strncmp(argv[1], "txn-tx-loss-",12)) TxnTxLoss((unsigned)atoi(argv[1]+12));
+    else if (!strncmp(argv[1], "txn-submit-",11)) TxnSubmitResult((unsigned)atoi(argv[1]+11));
+    else if (!strncmp(argv[1], "txn-receipt-",12)) TxnReceiptFailure((unsigned)atoi(argv[1]+12));
+    else if (!strncmp(argv[1], "txn-core-",9)) TxnCore((unsigned)atoi(argv[1]+9));
+    else if (!strncmp(argv[1], "txn-clear-",10)) TxnClearFence((unsigned)atoi(argv[1]+10));
     else CHECK(0);
-    if(strncmp(argv[1],"stop-",5)) CHECK(stop_calls==0U);
+    if(strncmp(argv[1],"stop-",5) && strncmp(argv[1],"txn-core-",9)) CHECK(stop_calls==0U);
     CHECK(ignored_stop_calls==0U && ignored_target_calls==0U && ignored_boot_reads==0U);
-    if(strncmp(argv[1],"boot-",5) && strcmp(argv[1],"stop-boot-retained"))CHECK(boot_reads==0U);
+    if(strncmp(argv[1],"boot-",5) && strcmp(argv[1],"stop-boot-retained") && strncmp(argv[1],"txn-",4) && strcmp(argv[1],"stop-txn-staging"))CHECK(boot_reads==0U);
     if(strncmp(argv[1],"target-",7) && strcmp(argv[1],"stop-target-retained") && strcmp(argv[1],"stop-time-compatible"))CHECK(target_calls==0U);
+    if(strncmp(argv[1],"txn-",4) && strcmp(argv[1],"stop-txn-staging"))CHECK(submit_calls==0U && receipt_reads==0U);
     printf("CAN service %s: %u assertions PASS\n", argv[1], checks);
     return 0;
 }

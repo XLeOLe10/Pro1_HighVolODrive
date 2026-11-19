@@ -4,6 +4,10 @@
  * from the project's STM32H750 CMSIS/HAL headers, not a CAN bus simulator. */
 #include <stdint.h>
 #define DISABLE 0U
+#define HSE_VALUE 25000000U
+#define RCC_CR_HSERDY_Pos (17U)
+#define RCC_CR_HSERDY_Msk (0x1UL << RCC_CR_HSERDY_Pos)
+#define RCC_CR_HSERDY RCC_CR_HSERDY_Msk
 #define HAL_FDCAN_STATE_READY 1U
 #define HAL_FDCAN_STATE_BUSY 2U
 typedef enum { HAL_OK = 0, HAL_ERROR = 1 } HAL_StatusTypeDef;
@@ -12,7 +16,7 @@ typedef struct {
  volatile uint32_t NBTP, TSCC, TSCV, TOCC, TOCV, CCCR, RXESC;
 } FDCAN_GlobalTypeDef;
 typedef struct { volatile uint32_t APB1HFZ1; } HostDebugRegisters;
-typedef struct { volatile uint32_t D2CCIP1R; } HostRccRegisters;
+typedef struct { volatile uint32_t D2CCIP1R, CR; } HostRccRegisters;
 typedef struct { volatile uint32_t CCFG; } HostCanCcuRegisters;
 extern HostDebugRegisters host_debug_registers;
 extern HostRccRegisters host_rcc_registers;
