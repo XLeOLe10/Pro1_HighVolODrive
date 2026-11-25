@@ -1,0 +1,45 @@
+002 Axis status observer verification — 2026-11-06 Asia/Shanghai
+Base commit: 1668486, Xiao_ODrive. Working-tree implementation, not committed.
+
+BUILD PASS: Keil incremental target FOC_T, ARMCC 5.06 update 7 build 960.
+Command: D:\UV4\UV4.exe -b MDK-ARM\FOC_T.uvprojx -t FOC_T -o MDK-ARM\FOC_T\axis-status-20261106-final.log
+No download, debug run or hardware operations performed by assistant.
+*** Using Compiler 'V5.06 update 7 (build 960)', folder: 'D:\ARM\ARMCC\Bin'
+Build target 'FOC_T'
+compiling axis_status.c...
+compiling board_safety.c...
+compiling app_runtime.c...
+linking...
+Program Size: Code=58916 RO-data=796 RW-data=712 ZI-data=24632
+FromELF: creating hex file...
+"FOC_T\FOC_T.axf" - 0 Error(s), 0 Warning(s).
+Build Time Elapsed:  00:00:18
+
+Final map: ROM 59812 B (+236 vs baseline); RW+ZI 25344 B (+8).
+axis_status_word: 0x24000000, 4 B, naturally aligned; total RAM delta includes alignment.
+PASS: 54 unique existing project source entries; axis_status.c included once.
+PASS: 27 compile-time policy cases; ARMCC command:
+D:\ARM\ARMCC\Bin\armcc.exe --cpu Cortex-M7.fp.dp --c99 -I Core/Inc -c tests/axis_status_compile_checks.c -o MDK-ARM/FOC_T/axis_status_compile_checks.o
+Exit 0, no compiler diagnostics. This is NOT runtime execution of C/RTOS/MCU.
+PASS: independent source review, no blocking findings. Fault after physical disable; normal publish after actual software output decision; both inside existing PRIMASK protection.
+PASS: no control code reads axis_status_word. No new task/allocation/command/threshold.
+PASS: open_foc algorithm, ADC/timer configuration, FreeRTOS task/configuration, .ioc and vendor files unchanged from 1668486.
+PASS: disassembly confirms one aligned 32-bit STR per publisher; neither publisher calls another function. Caller ordering and barriers reviewed in source.
+FromELF: D:\ARM\ARMCC\Bin\fromelf.exe --text -c --output=MDK-ARM/FOC_T/axis-status-disassembly.txt MDK-ARM/FOC_T/FOC_T.axf
+HOST: NOT_RUN (no native C compiler found in PATH/common checked locations; no environment installed).
+HW: NOT_RUN for this new build. Prior 001 screenshots belong to 1668486 baseline, not automatic evidence for changed ISR latency.
+Remaining: state readout, ISR/critical max cycles, real fault paths, physical outputs, full closed-loop worst case.
+
+SHA256:
+Core/Inc/axis_status.h 16A8FAEBE42F2C60550CB3B1C031F6C36C6158AF4DB386A259F5E6E2FA7D1CCD
+Core/Src/axis_status.c 097424EF92A573DC910BAEE11B4DD95CAE4C043408A18AECD9E63A050E332CDB
+Core/Src/app_runtime.c 47244C6CE86890125A4DBAC3D432273B2D3574B7C2CF2EAD07B5F5A2445E6839
+Core/Src/board_safety.c E6E1EF42231AB7D4F8EC94102D50B15D5888C6988DACBCF54E63FBD37FE533A7
+Core/Inc/board_config.h 45CD5064D287016050085125276B9B1E89FB7D13B0740B291B2AC1A9C1FCD8E9
+Core/Inc/app_policy.h D3BE7141AA698C1E1CB85B5871671C5A2A1B9FDE77F2BD535407FB6CF1CCFED8
+Core/Src/open_foc.c 0FB215F8F73586DEF1D2A805458FE35106A1AE6DA1F37EB46080D172D5A4BF82
+FOC_T.ioc 1B9D96EB09DB1B3FDB995B8AF08CB483500C65745A033B7930A284371DC5F334
+MDK-ARM/FOC_T.uvprojx 01C81425064EB87D4B305C4BCEE539EA354D6AF5A43242491370A0C6AE2670D0
+tests/axis_status_compile_checks.c 0C5A722ADDE2054024FDBD936D87B9B006440CA653CA05B5A8B81D26F20B12DF
+MDK-ARM/FOC_T/FOC_T.axf 8A4BE63986A7A1ACBFAE0A2A7B320E3217BDF00CA4C515E1835B38C7E00FC2A9
+MDK-ARM/FOC_T/FOC_T.map D129330F397252622929915E95A7584B1665ED66077EB0226633EF27E1E76D6D

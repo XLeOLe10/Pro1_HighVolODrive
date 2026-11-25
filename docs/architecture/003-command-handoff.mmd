@@ -1,0 +1,10 @@
+flowchart LR
+  C["通信适配层<br/>局部解析完整 B 组"] --> V["appTask 状态管理<br/>区外校验来源、状态、数值、期限"]
+  V --> M["单槽 mailbox<br/>PRIMASK 内固定整组复制<br/>DMB 发布并恢复；槽满 BUSY"]
+  M --> I["TIM1 周期入口<br/>复核 seq / epoch / fault<br/>一次安装 active B；发布 applied_seq"]
+  I --> F["本轮 FOC 只读完整 B<br/>降低 Iq 上限本拍生效"]
+  S["STOP 独立撤销标记"] --> R["撤输出、作废旧 epoch / pending"]
+  E["快速 FAULT：先关输出"] --> R
+  R --> I
+  A["没有新组：沿用有效 A<br/>不自旋、不混用 A/B"] --> I
+  N["拟议，尚未实现<br/>applied 不等于转速到达或 PWM 物理生效"]

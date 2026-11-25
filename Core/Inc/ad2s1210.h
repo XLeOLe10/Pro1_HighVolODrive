@@ -2,8 +2,55 @@
 #define __AD2S1210_H
 
 #include <stdint.h>
+#include "board_config.h"
+
+/* appTask owns acquisition. TIM1 consumes this complete frame.
+   Timestamps refer to the SAMPLE falling edge. valid describes a position
+   transaction; the AD2S fault bits remain a separate diagnostic policy. */
+typedef struct
+{
+    float position_rad;
+    float speed_rpm;
+    uint32_t sample_cycles;
+    uint32_t sample_tick_ms;
+    uint32_t sequence;
+    uint32_t valid;
+    uint32_t speed_valid;
+    uint32_t fault;
+} AD2S1210_FeedbackSnapshot;
+
+#if AXIS_COMMAND_BENCH_ENABLE
+enum {
+    AD2S_AGE_IDLE = 0,
+    AD2S_AGE_PENDING,
+    AD2S_AGE_EDGE_BY_CHECK,
+    AD2S_AGE_EDGE_AFTER_CHECK,
+    AD2S_AGE_INVALID_NEXT,
+    AD2S_AGE_UNKNOWN
+};
+
+/* TIM1 arms once with its actual ready-decision sample. The publishing task
+   completes the record for the adjacent attempt. Read state before intervals.
+   EDGE_BY_CHECK includes equality of software timestamps. */
+typedef struct {
+    uint32_t state;
+    uint32_t source_sequence;
+    uint32_t next_sequence;
+    uint32_t check_age_cycles;
+    uint32_t edge_interval_cycles;
+    uint32_t edge_to_publish_cycles;
+} AD2S1210_AgeTrace;
+extern volatile AD2S1210_AgeTrace ad2s_age_trace;
+void AD2S1210_ArmAgeTrace(const AD2S1210_FeedbackSnapshot *source,
+                         uint32_t check_cycles);
+#endif
+
+/* Bounded PRIMASK-protected copy, no RTOS call or waiting for the writer. */
+void AD2S1210_GetSnapshot(AD2S1210_FeedbackSnapshot *snapshot);
+
 
 void AD2S1210_Init(void);
+/* Serialized acquisition: Init before scheduling, then only appTask. */
 void AD2S1210_Sample(void);
 void AD2S1210_Run_1kHz(void);
 void AD2S1210_Run_20kHz(void);
@@ -69,5 +116,12 @@ extern volatile uint32_t ad2s_acquisition_last_cycles;
 extern volatile uint32_t ad2s_acquisition_max_cycles;
 extern volatile uint32_t ad2s_acquisition_budget_cycles;
 extern volatile uint32_t ad2s_acquisition_over_budget_count;
+/* Body timing excludes PRIMASK prologue/restore and statistics update.
+   Complete interrupt latency still needs a board measurement. */
+extern volatile uint32_t ad2s_snapshot_max_cycles;
+extern volatile uint32_t ad2s_sample_edge_max_cycles;
+extern volatile uint32_t ad2s_sample_interval_cycles;
+extern volatile uint32_t ad2s_sample_interval_max_cycles;
+extern volatile uint32_t ad2s_sample_gap_count;
 
 #endif

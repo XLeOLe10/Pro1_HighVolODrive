@@ -1,5 +1,6 @@
 # Keil generated build output (configured by FOC_T.uvprojx)
 /MDK-ARM/FOC_T/
+/MDK-ARM/FOC_T_CommandBench/
 **/Objects/
 **/Listings/
 /build/

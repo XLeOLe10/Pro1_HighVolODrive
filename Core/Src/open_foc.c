@@ -13,7 +13,6 @@
 #define FOC_ALIGN_U_MAX               0.05f
 #define FOC_ALIGN_TIME_MS             1200U
 #define FOC_SPEED_RAMP_RPM_PER_MS     0.20f  /* 200 rpm/s: 0 -> 100 rpm in about 0.5 s */
-#define FOC_SPEED_TEST_STEP_RPM       25.0f
 
 #define FOC_U_LIMIT                   1.0f
 #define FOC_CURRENT_PI_U_LIMIT_DEFAULT 0.50f
@@ -47,6 +46,11 @@ static uint8_t run_was_requested;
 static uint32_t align_ms_left;
 static uint16_t pole_estimate_stable_ms;
 static float pole_estimate_last_speed_rpm;
+/* Only OpenFOC_ApplyCommand, called by TIM1, installs these command inputs.
+ * Watch globals below are mirrors, not a command interface. */
+static uint8_t command_run;
+static float command_speed_rpm;
+static float command_iq_limit_a;
 
 volatile uint8_t foc_run_request = 0U;
 volatile FOC_ControlState foc_control_state_request = FOC_CONTROL_CURRENT_LOOP;
@@ -57,7 +61,7 @@ volatile float foc_dv = 0.5f;
 volatile float foc_dw = 0.5f;
 volatile float foc_theta = 0.0f;
 volatile float foc_current_rpm = 0.0f;
-volatile uint8_t foc_aligning = 1U;
+volatile uint8_t foc_aligning = 0U;
 /* Adjustable in Keil Watch.  Start conservatively at 24 V because the former
    fixed 0.04 command caused an AD2S1210 input-clipping fault during alignment. */
 volatile float foc_align_u_norm = FOC_ALIGN_U_DEFAULT;
@@ -89,17 +93,16 @@ volatile float foc_current_pi_u_limit_norm = FOC_CURRENT_PI_U_LIMIT_DEFAULT;
 volatile float foc_current_pi_i_limit_norm = FOC_CURRENT_PI_I_LIMIT_DEFAULT;
 volatile float foc_current_test_ref_limit_a = FOC_CURRENT_TEST_REF_LIMIT_A;
 
-/* Conservative defaults for the first 50 rpm speed-loop test. */
-volatile float foc_speed_target_rpm = 50.0f;
+/* Command mirrors; no default run target is installed. */
+volatile float foc_speed_target_rpm = 0.0f;
 volatile float foc_speed_ref_rpm = 0.0f;
 volatile float foc_speed_feedback_rpm = 0.0f;
 volatile float foc_kp_speed = 0.15f;
 volatile float foc_ki_speed = 0.08f;
 volatile float foc_speed_integrator = 0.0f;
 volatile float foc_speed_pi_iq_ref_a = 0.0f;
-volatile float foc_speed_iq_limit_a = 0.30f;
-/* Write +1/-1 in Watch for one +25/-25 rpm target step.  The command is
-   consumed and cleared automatically by the 1 ms task. */
+volatile float foc_speed_iq_limit_a = 0.0f;
+/* Retained for old Watch layouts; ignored and cleared, never a command. */
 volatile int8_t foc_speed_step_command = 0;
 
 /* State 2 is a temporary resolver/pole-pair commissioning mode.  The
@@ -121,16 +124,6 @@ static float FOC_Direction(void)
 static float FOC_Abs(float value)
 {
     return (value < 0.0f) ? -value : value;
-}
-
-static FOC_ControlState FOC_SanitizeState(FOC_ControlState state)
-{
-    if ((state == FOC_CONTROL_SPEED_CURRENT_LOOP) ||
-        (state == FOC_CONTROL_RESOLVER_OPEN_LOOP_TEST))
-    {
-        return state;
-    }
-    return FOC_CONTROL_CURRENT_LOOP;
 }
 
 static void FOC_ResetCurrentPI(void)
@@ -335,7 +328,7 @@ static void FOC_UpdateSpeedPI(void)
 {
     float error;
     float output;
-    float iq_limit = foc_speed_iq_limit_a;
+    float iq_limit = command_iq_limit_a;
 
     if (iq_limit < 0.0f)
     {
@@ -413,12 +406,15 @@ void OpenFOC_Init(void)
     motion_feedback_valid = 0U;
     current_feedback_valid = 0U;
     foc_enable = 1U;
+    command_run = 0U;
+    command_speed_rpm = 0.0f;
+    command_iq_limit_a = 0.0f;
     run_was_requested = 0U;
     align_ms_left = FOC_ALIGN_TIME_MS;
     foc_run_request = 0U;
     foc_control_state_request = FOC_CONTROL_CURRENT_LOOP;
     foc_control_state_active = FOC_CONTROL_CURRENT_LOOP;
-    foc_aligning = 1U;
+    foc_aligning = 0U;
     foc_iq_ref_a = 0.0f;
     foc_uq_ff = 0.0f;
     foc_speed_ref_rpm = 0.0f;
@@ -428,13 +424,6 @@ void OpenFOC_Init(void)
     FOC_ResetSpeedPI();
     FOC_ResetPolePairEstimator();
     FOC_WriteDuty(0.5f, 0.5f, 0.5f);
-}
-
-void OpenFOC_SetTargetRPM(float rpm)
-{
-    if (rpm > 1000.0f) rpm = 1000.0f;
-    if (rpm < -1000.0f) rpm = -1000.0f;
-    foc_speed_target_rpm = rpm;
 }
 
 void OpenFOC_SetVoltageNorm(float voltage_norm)
@@ -474,7 +463,13 @@ void OpenFOC_SetRotorFeedback(float resolver_angle_rad,
 void OpenFOC_Stop(void)
 {
     foc_run_request = 0U;
-    foc_enable = 0U;
+    /* Restartable disarm: reset immediately, without waiting for the slow loop. */
+    command_run = 0U;
+    command_speed_rpm = 0.0f;
+    command_iq_limit_a = 0.0f;
+    foc_speed_target_rpm = 0.0f;
+    foc_speed_iq_limit_a = 0.0f;
+    foc_speed_step_command = 0;
     run_was_requested = 0U;
     align_ms_left = FOC_ALIGN_TIME_MS;
     ramped_speed_ref_rpm = 0.0f;
@@ -489,39 +484,68 @@ void OpenFOC_Stop(void)
     FOC_WriteDuty(0.5f, 0.5f, 0.5f);
 }
 
+FOC_RunPhase OpenFOC_GetRunPhase(void)
+{
+    /* A preloaded alignment duration while idle is not active alignment.
+     * No second writable state is introduced; TIM1 owns both private inputs. */
+    if (command_run == 0U) return FOC_PHASE_IDLE;
+    return (align_ms_left != 0U) ? FOC_PHASE_ALIGNING : FOC_PHASE_CLOSED_LOOP;
+}
+
+void OpenFOC_ApplyCommand(const AxisCommandFrame *frame)
+{
+    if (frame == NULL)
+    {
+        if (command_run != 0U) OpenFOC_Stop();
+        command_run = 0U;
+        command_speed_rpm = 0.0f;
+        command_iq_limit_a = 0.0f;
+    }
+    else
+    {
+        if (command_run == 0U)
+        {
+            /* START immediately establishes a fresh alignment, even if the
+             * next 1 ms divider boundary has not arrived yet. */
+            run_was_requested = 0U;
+            align_ms_left = FOC_ALIGN_TIME_MS;
+            foc_aligning = 1U;
+        }
+        command_speed_rpm = frame->speed_target_rpm;
+        command_iq_limit_a = frame->iq_limit_a;
+        command_run = 1U;
+        foc_control_state_active = FOC_CONTROL_SPEED_CURRENT_LOOP;
+    }
+    foc_run_request = command_run;
+    foc_control_state_request = FOC_CONTROL_SPEED_CURRENT_LOOP;
+    foc_speed_target_rpm = command_speed_rpm;
+    foc_speed_iq_limit_a = command_iq_limit_a;
+    foc_speed_step_command = 0;
+    /* Also refresh an already-idle NULL command; Watch is not the authority. */
+    foc_aligning = (uint8_t)(OpenFOC_GetRunPhase() == FOC_PHASE_ALIGNING);
+}
+
+void OpenFOC_EnforceCommandLimit(void)
+{
+    /* Called each fast cycle AFTER the optional slow PI, BEFORE current PI.
+     * This clamps requested Iq, not measured phase current or alignment Id. */
+    float limit = command_run != 0U ? command_iq_limit_a : 0.0f;
+    foc_iq_ref_a = AxisCommand_ClampIq(foc_iq_ref_a, limit);
+    foc_speed_pi_iq_ref_a = AxisCommand_ClampIq(foc_speed_pi_iq_ref_a, limit);
+    foc_speed_integrator = AxisCommand_ClampIq(foc_speed_integrator, limit);
+}
+
 void OpenFOC_Ramp_1ms(void)
 {
-    FOC_ControlState requested_state;
-    int8_t speed_step_command;
+    FOC_ControlState requested_state = FOC_CONTROL_SPEED_CURRENT_LOOP;
+    if (foc_enable == 0U) return;
+    foc_speed_step_command = 0;
 
-    if (foc_enable == 0U)
-    {
-        return;
-    }
-
-    speed_step_command = foc_speed_step_command;
-    if (speed_step_command != 0)
-    {
-        foc_speed_step_command = 0;
-        if (speed_step_command > 0)
-        {
-            OpenFOC_SetTargetRPM(foc_speed_target_rpm +
-                                 FOC_SPEED_TEST_STEP_RPM);
-        }
-        else
-        {
-            OpenFOC_SetTargetRPM(foc_speed_target_rpm -
-                                 FOC_SPEED_TEST_STEP_RPM);
-        }
-    }
-
-    requested_state = FOC_SanitizeState(foc_control_state_request);
-
-    if (foc_run_request == 0U)
+    if (command_run == 0U)
     {
         run_was_requested = 0U;
         align_ms_left = FOC_ALIGN_TIME_MS;
-        foc_aligning = 1U;
+        foc_aligning = 0U;
         ramped_speed_ref_rpm = 0.0f;
         foc_speed_ref_rpm = 0.0f;
         foc_current_rpm = 0.0f;
@@ -622,7 +646,7 @@ void OpenFOC_Ramp_1ms(void)
 
     if (foc_control_state_active == FOC_CONTROL_SPEED_CURRENT_LOOP)
     {
-        FOC_RampSpeed(foc_speed_target_rpm);
+        FOC_RampSpeed(command_speed_rpm);
 
         foc_speed_ref_rpm = ramped_speed_ref_rpm;
         foc_current_rpm = ramped_speed_ref_rpm;
@@ -677,7 +701,7 @@ void OpenFOC_Run_20kHz(void)
     float dv = 0.5f;
     float dw = 0.5f;
 
-    if ((foc_enable == 0U) || (foc_run_request == 0U) ||
+    if ((foc_enable == 0U) || (command_run == 0U) ||
         (current_feedback_valid == 0U))
     {
         foc_du = 0.5f;

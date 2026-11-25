@@ -1,0 +1,345 @@
+#include "axis_command.h"
+#include "main.h"
+#include "board_safety.h"
+#include "cmsis_os.h"
+#include "board_config.h"
+#if AXIS_COMMAND_BENCH_ENABLE
+#include "can_link.h"
+#endif
+
+/* Intentionally unconfirmed. These zeroes mean reject, not unlimited.
+ * A later reviewed configuration must define real speed/current/lease bounds.
+ * HOST tests supply synthetic limits; those are never linked here. */
+#if AXIS_COMMAND_BENCH_ENABLE
+/* Synthetic command fixtures ONLY; config header rejects enabled power here.
+ * Runtime does not pass bench commands to FOC. Not motor operating limits. */
+static const AxisCommandLimits command_limits = {1U, 1000.0f, 4.0f, 1000U};
+#else
+static const AxisCommandLimits command_limits = {0U, 0.0f, 0.0f, 0U};
+#endif
+static AxisCommandCore command_core;
+#if AXIS_COMMAND_BENCH_ENABLE
+/* Task publishes pending + its sidecar under the SAME PRIMASK lock. TIM1 alone
+ * moves it to active or clears it. seq=0 denotes the legacy untimed API, not a
+ * valid timed lease. Neither sidecar is a debugger-controlled authority. */
+typedef struct {
+    uint32_t command_seq;
+    uint32_t origin_tick;
+    uint32_t lifetime_ticks;
+} CommandTime;
+static CommandTime pending_time;
+static CommandTime active_time;
+/* Runtime appTask-only writer, TIM1 reader; never decreases or wraps. Task
+ * observes/updates under the same PRIMASK lock as publication. This durable
+ * rejection watermark covers a live task while TIM1/HAL tick are stalled. */
+static volatile uint32_t expired_through_seq;
+
+static uint32_t TimedLeaseValid(const CommandTime *timing, uint32_t seq)
+{
+    if (timing->command_seq == 0U) return 1U;
+    if (timing->command_seq <= expired_through_seq) return 0U;
+    return (timing->command_seq == seq) &&
+        CanLink_LeaseValid(timing->origin_tick, timing->lifetime_ticks);
+}
+
+/* TIM1 only. Preserve the existing fault/STOP/config/exhaustion precedence.
+ * An expired pending UPDATE conservatively cancels both pending and active;
+ * it cannot keep an old run alive. Hardware disarm precedes software Revoke.
+ * A pre-Tick revoke records the current (previous completed cycle) control_seq;
+ * Tick increments it afterwards. Receipt remains handling history, not permit. */
+static void GuardTimedCommands(void)
+{
+    if ((board_fault_mask != 0U) || (command_core.fault_latched != 0U) ||
+        (command_core.stop_pending != 0U) || (command_core.exhausted != 0U) ||
+        (command_core.config_valid == 0U)) return;
+    if (((command_core.active_valid != 0U) &&
+         (TimedLeaseValid(&active_time, command_core.active.command_seq) == 0U)) ||
+        ((command_core.pending_ready != 0U) &&
+         (TimedLeaseValid(&pending_time, command_core.last_accepted_seq) == 0U)))
+    {
+        BoardSafety_DisableOutputs();
+        AxisCommand_Revoke(&command_core, AXIS_CMD_EXPIRED);
+        pending_time.command_seq = 0U;
+        active_time.command_seq = 0U;
+    }
+}
+#endif
+extern osThreadId_t appTaskHandle;
+
+volatile uint32_t axis_command_configured;
+volatile uint32_t axis_command_epoch;
+volatile uint32_t axis_command_permit;
+volatile uint32_t axis_command_applied_seq;
+volatile uint32_t axis_command_result;
+volatile uint32_t axis_command_result_seq;
+volatile uint32_t axis_command_cancelled_seq;
+volatile uint32_t axis_command_stop_applied;
+volatile uint32_t axis_command_control_seq;
+volatile uint32_t axis_command_critical_max_cycles;
+
+static uint32_t IsPublisher(void)
+{
+    if (__get_IPSR() != 0U) return 0U;
+    if (osKernelGetState() != osKernelRunning) return 0U;
+    return (uint32_t)(osThreadGetId() == appTaskHandle);
+}
+
+static void Unlock(uint32_t saved, uint32_t started)
+{
+    uint32_t elapsed;
+    __DMB();
+    elapsed = (uint32_t)(DWT->CYCCNT - started);
+    if (elapsed > axis_command_critical_max_cycles)
+        axis_command_critical_max_cycles = elapsed;
+    __set_PRIMASK(saved);
+}
+
+static uint32_t CurrentPermit(uint32_t now)
+{
+    uint32_t permit = AxisCommand_Permitted(&command_core, now, board_fault_mask);
+#if AXIS_COMMAND_BENCH_ENABLE
+    if (permit != 0U)
+        permit = TimedLeaseValid(&active_time, command_core.active.command_seq);
+#endif
+    return permit;
+}
+
+/* Diagnostic scalar mirrors, not a coherent external multiword snapshot.
+ * Use function return values for task request acknowledgements. */
+static void PublishDiagnostics(uint32_t now)
+{
+    axis_command_configured = command_core.config_valid;
+    axis_command_epoch = command_core.run_epoch;
+    axis_command_permit = AxisCommand_Permitted(&command_core, now, board_fault_mask);
+    axis_command_applied_seq = command_core.applied_seq;
+    axis_command_result = command_core.result;
+    axis_command_result_seq = command_core.result_seq;
+    axis_command_cancelled_seq = command_core.cancelled_seq;
+    axis_command_stop_applied = command_core.stop_applied_ticket;
+    axis_command_control_seq = command_core.control_seq;
+}
+
+void AxisCommandPort_Init(void)
+{
+    AxisCommand_Init(&command_core, &command_limits);
+#if AXIS_COMMAND_BENCH_ENABLE
+    pending_time.command_seq = 0U;
+    active_time.command_seq = 0U;
+    expired_through_seq = 0U;
+#endif
+    PublishDiagnostics(HAL_GetTick());
+}
+
+uint32_t AxisCommandPort_CheckTargets(float speed_target_rpm, float iq_limit_a)
+{
+    if (IsPublisher() == 0U) return AXIS_CMD_INVALID_CONTEXT;
+    /* No synthetic command/epoch/lease and no access to command_core. */
+    return AxisCommand_ValidateTargets(&command_limits, speed_target_rpm, iq_limit_a);
+}
+
+uint32_t AxisCommandPort_Submit(const AxisCommandFrame *request, uint32_t *seq)
+{
+    AxisCommandFrame local;
+    uint32_t result, saved, started;
+    if (seq != NULL) *seq = 0U;
+    if ((request == NULL) || (seq == NULL) || (IsPublisher() == 0U))
+        return AXIS_CMD_INVALID;
+    /* Caller owns request: no DMA/debugger is permitted to change it in place. */
+    local = *request;
+    result = AxisCommand_Validate(&command_limits, &local, HAL_GetTick());
+    if (result != AXIS_CMD_OK) return result;
+    saved = __get_PRIMASK();
+    __disable_irq();
+    started = DWT->CYCCNT;
+    result = AxisCommand_PublishValidated(&command_core, &local, HAL_GetTick(),
+                                          board_fault_mask, seq);
+#if AXIS_COMMAND_BENCH_ENABLE
+    if (result == AXIS_CMD_OK) pending_time.command_seq = 0U;
+#endif
+    Unlock(saved, started);
+    return result;
+}
+
+uint32_t AxisCommandPort_SubmitTimed(const AxisCommandFrame *request,
+    uint32_t origin_tick, uint32_t lifetime_ticks, uint32_t *seq)
+{
+#if AXIS_COMMAND_BENCH_ENABLE
+    AxisCommandFrame local;
+    uint32_t result, saved, started, now, lifetime_ms;
+#endif
+    if (seq != NULL) *seq = 0U;
+    if ((request == NULL) || (seq == NULL) || (IsPublisher() == 0U))
+        return AXIS_CMD_INVALID;
+#if AXIS_COMMAND_BENCH_ENABLE
+    if ((origin_tick > 0xFFFFU) || (lifetime_ticks == 0U) ||
+        (lifetime_ticks > 31250U)) return AXIS_CMD_INVALID;
+    local = *request;
+    now = HAL_GetTick();
+    lifetime_ms = (lifetime_ticks * 32U + 999U) / 1000U;
+    /* Only an auxiliary validity window for the unchanged core. The original
+     * SOF + hardware lifetime below is checked at publish and every ISR gate. */
+    local.received_tick_ms = now;
+    local.expires_tick_ms = now + lifetime_ms;
+    result = AxisCommand_Validate(&command_limits, &local, now);
+    if (result != AXIS_CMD_OK) return result;
+    if (CanLink_LeaseValid(origin_tick, lifetime_ticks) == 0U)
+        return AXIS_CMD_EXPIRED;
+    saved = __get_PRIMASK();
+    __disable_irq();
+    started = DWT->CYCCNT;
+    if (CanLink_LeaseValid(origin_tick, lifetime_ticks) == 0U)
+        result = AXIS_CMD_EXPIRED;
+    else
+        result = AxisCommand_PublishValidated(&command_core, &local, HAL_GetTick(),
+                                              board_fault_mask, seq);
+    if (result == AXIS_CMD_OK)
+    {
+        pending_time.command_seq = *seq;
+        pending_time.origin_tick = origin_tick;
+        pending_time.lifetime_ticks = lifetime_ticks;
+    }
+    Unlock(saved, started);
+    return result;
+#else
+    (void)origin_tick;
+    (void)lifetime_ticks;
+    return AXIS_CMD_UNSUPPORTED_MODE;
+#endif
+}
+
+void AxisCommandPort_ObserveTime(void)
+{
+#if AXIS_COMMAND_BENCH_ENABLE
+    uint32_t saved, started;
+    if (IsPublisher() == 0U) return;
+    /* With the sole task producer, an empty core cannot gain a command in TIM1.
+     * Avoid both lock overhead and CAN reads during the usual stopped idle. */
+    if ((command_core.active_valid == 0U) && (command_core.pending_ready == 0U)) return;
+    saved = __get_PRIMASK();
+    __disable_irq();
+    started = DWT->CYCCNT;
+    if ((command_core.active_valid != 0U) && (active_time.command_seq != 0U) &&
+        (TimedLeaseValid(&active_time, command_core.active.command_seq) == 0U) &&
+        (active_time.command_seq > expired_through_seq))
+        expired_through_seq = active_time.command_seq;
+    if ((command_core.pending_ready != 0U) && (pending_time.command_seq != 0U) &&
+        (TimedLeaseValid(&pending_time, command_core.last_accepted_seq) == 0U) &&
+        (pending_time.command_seq > expired_through_seq))
+        expired_through_seq = pending_time.command_seq;
+    Unlock(saved, started);
+#endif
+}
+
+uint32_t AxisCommandPort_Stop(uint32_t *ticket)
+{
+    uint32_t result, saved, started;
+    if (ticket != NULL) *ticket = 0U;
+    if ((ticket == NULL) || (IsPublisher() == 0U)) return AXIS_CMD_INVALID;
+    saved = __get_PRIMASK();
+    __disable_irq();
+    started = DWT->CYCCNT;
+    result = AxisCommand_RequestStop(&command_core, ticket);
+    Unlock(saved, started);
+    return result;
+}
+
+uint32_t AxisCommandPort_GetEpoch(void)
+{
+    uint32_t saved = __get_PRIMASK();
+    uint32_t epoch, started;
+    __disable_irq();
+    started = DWT->CYCCNT;
+    epoch = command_core.run_epoch;
+    Unlock(saved, started);
+    return epoch;
+}
+
+const AxisCommandFrame *AxisCommandPort_BeginCycle(uint32_t now, uint32_t ready)
+{
+#if AXIS_COMMAND_BENCH_ENABLE
+    CommandTime candidate = pending_time;
+    uint32_t candidate_seq = command_core.pending_ready ? command_core.last_accepted_seq : 0U;
+    GuardTimedCommands();
+#endif
+    if (((command_core.active_valid != 0U) && (ready == 0U)) ||
+        ((AxisCommand_NeedsDisarm(&command_core, now, board_fault_mask) != 0U) &&
+         ((command_core.active_valid != 0U) || (command_core.stop_pending != 0U) ||
+          (board_output_enabled != 0U))))
+        BoardSafety_DisableOutputs();
+    AxisCommand_Tick(&command_core, now, board_fault_mask, ready);
+#if AXIS_COMMAND_BENCH_ENABLE
+    if ((candidate_seq != 0U) && (command_core.active_valid != 0U) &&
+        (command_core.active.command_seq == candidate_seq))
+    {
+        if (candidate.command_seq == candidate_seq) active_time = candidate;
+        else active_time.command_seq = 0U; /* Applied a legacy untimed command. */
+    }
+    if (command_core.active_valid == 0U) active_time.command_seq = 0U;
+    if (command_core.pending_ready == 0U) pending_time.command_seq = 0U;
+#endif
+    return command_core.active_valid != 0U ? &command_core.active : NULL;
+}
+
+uint32_t AxisCommandPort_FinalPermit(uint32_t now)
+{
+    uint32_t permit;
+    if ((AxisCommand_NeedsDisarm(&command_core, now, board_fault_mask) != 0U) &&
+        ((command_core.active_valid != 0U) || (board_output_enabled != 0U)))
+        BoardSafety_DisableOutputs();
+    permit = AxisCommand_Guard(&command_core, now, board_fault_mask);
+#if AXIS_COMMAND_BENCH_ENABLE
+    GuardTimedCommands();
+    if (command_core.active_valid == 0U) active_time.command_seq = 0U;
+    if (command_core.pending_ready == 0U) pending_time.command_seq = 0U;
+    permit = AxisCommand_Permitted(&command_core, now, board_fault_mask);
+#endif
+    PublishDiagnostics(now);
+    return permit;
+}
+
+void AxisCommandPort_RejectActive(uint32_t reason)
+{
+    BoardSafety_DisableOutputs();
+    AxisCommand_Revoke(&command_core, reason);
+#if AXIS_COMMAND_BENCH_ENABLE
+    pending_time.command_seq = 0U;
+    active_time.command_seq = 0U;
+#endif
+    PublishDiagnostics(HAL_GetTick());
+}
+
+
+uint32_t AxisCommandPort_GetSnapshot(AxisCommandSnapshot *snapshot)
+{
+    uint32_t saved, started;
+    if ((snapshot == NULL) || (IsPublisher() == 0U)) return AXIS_CMD_INVALID;
+    saved = __get_PRIMASK();
+    __disable_irq();
+    started = DWT->CYCCNT;
+    snapshot->active = command_core.active;
+    snapshot->active_valid = command_core.active_valid;
+    snapshot->run_epoch = command_core.run_epoch;
+    snapshot->applied_seq = command_core.applied_seq;
+    snapshot->applied_control_seq = command_core.applied_control_seq;
+    snapshot->control_seq = command_core.control_seq;
+    snapshot->result_seq = command_core.result_seq;
+    snapshot->result = command_core.result;
+    snapshot->cancelled_seq = command_core.cancelled_seq;
+    snapshot->stop_applied_ticket = command_core.stop_applied_ticket;
+    snapshot->permit = CurrentPermit(HAL_GetTick());
+    Unlock(saved, started);
+    return AXIS_CMD_OK;
+}
+
+
+uint32_t AxisCommandPort_GetReceipt(AxisCommandReceipt *receipt)
+{
+    uint32_t saved, started;
+    if ((receipt == NULL) || (IsPublisher() == 0U)) return AXIS_CMD_INVALID;
+    saved = __get_PRIMASK();
+    __disable_irq();
+    started = DWT->CYCCNT;
+    *receipt = command_core.receipt;
+    Unlock(saved, started);
+    return AXIS_CMD_OK;
+}

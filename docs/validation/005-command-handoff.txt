@@ -1,0 +1,267 @@
+005 Command handoff verification — 2026-11-07 Asia/Shanghai
+Repository: D:\stm32H750\High_fengshan\FOC_T
+Branch: Xiao_ODrive
+HEAD: 96509728ac533387b4fee189d98cf09e4e62c219 plus the unstaged 005 source/project/test changes listed by hashes below.
+No Git staging/commit/push/merge, hardware download/run or output enable was performed.
+
+SRC PASS: implementation and two independent reviews. Typed 32-byte command;
+task-local validation, PRIMASK fixed publication, TIM1-only active/epoch,
+STOP/fault/expiry/readiness loss revoke, final permission check, legacy command
+mirrors isolated. Q-axis reference limit is not physical over-current protection.
+Target configuration is unconfirmed: START/UPDATE rejected. No actual RX producer.
+
+BUILD PASS: full Keil rebuild log reports 0 errors / 0 warnings, 00:03:23.
+Process finished and new AXF/HEX/MAP were generated. Separate OS exit code was
+not retained for this detached build; PASS is based on complete log + artifacts.
+Command (working directory repository):
+D:\UV4\UV4.exe -r "D:\stm32H750\High_fengshan\FOC_T\MDK-ARM\FOC_T.uvprojx" -t FOC_T -o "D:\stm32H750\High_fengshan\FOC_T\MDK-ARM\FOC_T\command-handoff-absolute-20261107.log"
+Launched with Start-Process -WindowStyle Hidden and explicit WorkingDirectory.
+ARMCC 5.06 update 7 build 960; 55 C sources + 1 assembly, no C++.
+HOST fixtures are excluded from Keil. No CubeMX, RTOS sizing, clocks, DMA,
+cache policy or linker region configuration change in this step.
+
+Earlier verification attempts:
+- First combined tool copy/build attempt ended with no completion evidence;
+  missing test files caused an initial HOST compile failure. Files were synced,
+  then the repository script compiled/executed the final source successfully.
+- A relative-path UV4 launch had no completed log evidence. Only that task-owned
+  PID was terminated, then the full absolute-path rebuild above succeeded.
+  Cause of the earlier UI wait was not verified. User's existing UV4 remained.
+- Computer-use inspection was unavailable: Windows sandbox helper lock failure.
+  This did not change the compiler/tests or authorize any hardware operation.
+
+HOST PASS: tests/run-command-host.ps1, repository working directory, exit 0.
+GCC 4.5.3 from existing Quartus Cygwin install, C99, -Wall -Wextra -Werror;
+core adds -pedantic. 8 core scenario groups / 203 assertions + 55 real FOC/Xmath
+integration assertions, total 258 assertions. Synthetic configuration only.
+Cygwin find_fast_cwd is an environment warning, not a C compiler diagnostic.
+Sequential HOST tests do not prove Cortex-M7 interrupt atomicity/timing or PWM.
+No additional software installed; outputs live under ignored build/command-host.
+
+Compile-time PASS (separate from HOST): existing 27 axis status policy checks,
+armcc --cpu Cortex-M7.fp.dp --c99 -I Core/Inc -c tests/axis_status_compile_checks.c
+-o MDK-ARM/FOC_T/axis_status_compile_checks.o ; exit 0.
+New command size/float32/field offsets/alignment checked while building core.
+
+Target OBJECT disassembly PASS (not hardware timing):
+AxisCommandPort_Submit MRS PRIMASK 0x46 -> CPSID i 0x4c ->
+BL AxisCommand_PublishValidated 0x66 -> BL Unlock 0x70;
+Unlock DMB 0x08 -> MSR PRIMASK,r0 0x26. Validation call is before MRS.
+Command: D:\ARM\ARMCC\Bin\fromelf.exe --text -c
+--output=MDK-ARM/FOC_T/axis_command-disassembly.txt MDK-ARM/FOC_T/axis_command.o
+Exit 0. No real publication timing measurement; no real producer calls yet.
+
+HW NOT_RUN: no 005 board readings. 002 screenshots do not validate this image.
+Next limited check: permit/output zero; max ISR cycles in (0,9996); overrun zero.
+Physical PWM/EN, full IRQ/PRIMASK bounds, STOP latency, closed-loop, current/angle
+physical alignment, confirmed operation limits and cross-reset session remain open.
+
+Final map: ROM 61688 bytes (compressed RW image 100), RW+ZI 25544 bytes;
+relative to prior build ROM +1876 bytes, static RAM +200 bytes.
+FreeRTOS heap 16384 bytes / appTask stack 4096 bytes unchanged.
+    command_limits                           0x0800f000   Data          16  axis_command.o(.constdata)
+    command_core                             0x240002fc   Data         148  axis_command.o(.bss)
+    ucHeap                                   0x240013c4   Data       16384  heap_4.o(.bss)
+    axis_command_cancelled_seq               0x24000018   Data           4  axis_command.o(.data)
+    __initial_sp                             0x240063c8   Data           0  startup_stm32h750xx.o(STACK)
+    Execution Region ER_IROM1 (Exec base: 0x08000000, Load base: 0x08000000, Size: 0x0000f094, Max: 0x00020000, ABSOLUTE)
+    Execution Region RW_IRAM1 (Exec base: 0x20000000, Load base: 0x0800f094, Size: 0x00000000, Max: 0x00020000, ABSOLUTE)
+    Execution Region RW_IRAM2 (Exec base: 0x24000000, Load base: 0x0800f094, Size: 0x000063c8, Max: 0x00080000, ABSOLUTE, COMPRESSED[0x00000064])
+    Total RO  Size (Code + RO Data)                61588 (  60.14kB)
+    Total RW  Size (RW Data + ZI Data)             25544 (  24.95kB)
+    Total ROM Size (Code + RO Data + RW Data)      61688 (  60.24kB)
+
+Unused producer entry sections reported by linker (interfaces remain in source/object):
+    Removing axis_command_core.o(i.AxisCommand_PublishValidated), (216 bytes).
+    Removing axis_command_core.o(i.AxisCommand_Validate), (184 bytes).
+    Removing axis_command.o(i.AxisCommandPort_GetEpoch), (40 bytes).
+    Removing axis_command.o(i.AxisCommandPort_Stop), (72 bytes).
+    Removing axis_command.o(i.AxisCommandPort_Submit), (136 bytes).
+
+Raw complete Keil log:
+*** Using Compiler 'V5.06 update 7 (build 960)', folder: 'D:\ARM\ARMCC\Bin'
+Rebuild target 'FOC_T'
+assembling startup_stm32h750xx.s...
+compiling axis_status.c...
+compiling axis_command_core.c...
+compiling Xmath.c...
+compiling current_sense.c...
+compiling open_foc.c...
+compiling current_monitor.c...
+compiling axis_command.c...
+compiling freertos.c...
+compiling ad2s1210.c...
+compiling gpio.c...
+compiling main.c...
+compiling board_safety.c...
+compiling app_runtime.c...
+compiling adc.c...
+compiling spi.c...
+compiling tim.c...
+compiling usart.c...
+compiling stm32h7xx_it.c...
+compiling stm32h7xx_hal_timebase_tim.c...
+compiling stm32h7xx_hal_msp.c...
+compiling stm32h7xx_hal_tim_ex.c...
+compiling stm32h7xx_hal_adc_ex.c...
+compiling stm32h7xx_hal_tim.c...
+compiling stm32h7xx_hal_adc.c...
+compiling stm32h7xx_hal_rcc.c...
+compiling stm32h7xx_hal_gpio.c...
+compiling stm32h7xx_hal_flash.c...
+compiling stm32h7xx_hal_rcc_ex.c...
+compiling stm32h7xx_hal_flash_ex.c...
+compiling stm32h7xx_hal_hsem.c...
+compiling stm32h7xx_hal_mdma.c...
+compiling stm32h7xx_hal_dma_ex.c...
+compiling stm32h7xx_hal_pwr.c...
+compiling stm32h7xx_hal_pwr_ex.c...
+compiling stm32h7xx_hal_dma.c...
+compiling croutine.c...
+compiling event_groups.c...
+compiling list.c...
+compiling queue.c...
+compiling stream_buffer.c...
+compiling tasks.c...
+compiling timers.c...
+compiling stm32h7xx_hal_cortex.c...
+compiling heap_4.c...
+compiling port.c...
+compiling stm32h7xx_hal.c...
+compiling stm32h7xx_hal_exti.c...
+compiling stm32h7xx_hal_spi.c...
+compiling stm32h7xx_hal_i2c_ex.c...
+compiling stm32h7xx_hal_i2c.c...
+compiling stm32h7xx_hal_spi_ex.c...
+compiling stm32h7xx_hal_uart_ex.c...
+compiling stm32h7xx_hal_uart.c...
+compiling system_stm32h7xx.c...
+compiling cmsis_os2.c...
+linking...
+Program Size: Code=60776 RO-data=812 RW-data=764 ZI-data=24780  
+FromELF: creating hex file...
+"FOC_T\FOC_T.axf" - 0 Error(s), 0 Warning(s).
+Build Time Elapsed:  00:03:23
+
+Raw HOST script output:
+      0 [main] gcc 28556 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+gcc (GCC) 4.5.3
+Copyright (C) 2010 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+      1 [main] gcc 139596 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+    293 [main] axis_command_host_tests 136740 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+validation/configuration/finite values
+whole-frame A/B, full slot and separate acceptance/application
+STOP full-slot priority/idempotence/old epoch rejection
+START readiness rejection and UPDATE lifecycle
+pending/active expiry, no renewal of expired run, tick wrap/ambiguity
+fault after publication and final-gate fault, sticky denial
+bad sequence/epoch and all metadata exhaustion paths
+limit decrease on non-slow-loop tick; invalid clamp inputs
+PASS: 8 scenarios, 203 assertions; synthetic HOST limits only.
+Boundary: sequential core tests do not prove Cortex-M7 PRIMASK timing or physical PWM safety.
+      1 [main] gcc 133052 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+      1 [main] open_foc_command_host 140032 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+PASS: 55 FOC command integration assertions; CPU register stubs only
+HOST command and FOC integration suites PASS
+
+SHA256 current source/configuration/test/artifacts:
+Core/Inc/axis_command_core.h D74FE8D9C30BDF5BEA508D8C8ED4B4D542B5BE9E900D28B2E37C55A3461D4692
+Core/Inc/axis_command.h 6ABEC62A3272427DEEB4839943EB2B72E7D278ED80237942A2E39E4DA07CF7DC
+Core/Inc/axis_status.h 7672D284D376A1F636FA85E7C092FB4B7613493382E584023BF5EAD5A6E1D2AB
+Core/Inc/open_foc.h 6898D809A5B3DA9CDA09F2C2CFBB4BCEC3AE8CF80080B0758D69AB69B854D924
+Core/Src/axis_command_core.c 7A7F6198D17A06C75CB4B63D5EF97A9EB248E758C09C0848BF14B877140C930A
+Core/Src/axis_command.c D0FF1E8BF0C2E246CCFDCC76B84ACDF0FAC86FF3C472F0F675737EE13DD53435
+Core/Src/app_runtime.c 4A6F9BE2D8B837784FA5DFAC555E92513A92F2AFE641DF8B42AAF19276B60F07
+Core/Src/open_foc.c 5400A7785866ECE0541D10E1DF0A86963533089438123B218E264F11B21B41E4
+Core/Src/board_safety.c E6E1EF42231AB7D4F8EC94102D50B15D5888C6988DACBCF54E63FBD37FE533A7
+Core/Src/axis_status.c 097424EF92A573DC910BAEE11B4DD95CAE4C043408A18AECD9E63A050E332CDB
+Core/Src/freertos.c 99BD08DB399B20301425F5626A834DDD6B6BA5DC6530E5498CF6A18C0DA1EDCC
+Core/Inc/FreeRTOSConfig.h FB14A1DC80D770A37FBAE4D3879244F5EF6328EC5C76F3AEDD129DFE31C54249
+Core/Inc/board_config.h 45CD5064D287016050085125276B9B1E89FB7D13B0740B291B2AC1A9C1FCD8E9
+Core/Src/main.c 72274E8274BD3F0B389E4672E16B4CE326F64B03172163BBB277261B5111A7BC
+FOC_T.ioc 1B9D96EB09DB1B3FDB995B8AF08CB483500C65745A033B7930A284371DC5F334
+MDK-ARM/FOC_T.uvprojx 8246F324B198D6CD43144130B1CACAF62D39CEBB1311D4C6F175DE95DB03D13D
+MDK-ARM/FOC_T/FOC_T.sct 1CD561D34115CB611838E3C46A3073336004F0EE0DB6185CE1CD10E8EE168235
+MDK-ARM/FOC_T/FOC_T.axf 51E46851467E4EA47347B322574B92664A14791DD0773121B017D13FE70823E9
+MDK-ARM/FOC_T/FOC_T.hex 917D81B62FE9E6CA1706D5B4003FBFFCEA8B390D656CD0F51D20A55637B6AA30
+MDK-ARM/FOC_T/FOC_T.map E65A06FA2C3918538AA673EF9DC6BCB58C58116F69BD2202F1EFA63399E6BC13
+MDK-ARM/FOC_T/axis_command.o 183E89EFC918D0436AFFC8BA4A05A527A06A3D1F193D16F7075109447ED1701C
+MDK-ARM/FOC_T/axis_command-disassembly.txt C5CFC146EB3FDE0BD225B3D814B3F0463EAAC21286564F6CC5DABCECA625AEAD
+tests/axis_command_host_tests.c E2A55A714FA3D8F17E2935CC0F30FB7380317D9CC257D7B13A35C3A5CE8A6A34
+tests/open_foc_command_host.c 641590B7213F0E35FFDCEF7CBCDE48BC3456F5A2777C5CDA275EAD1718C936E3
+tests/host_stubs/tim.h FFCFE3A2238B67E844910124E95C3141E427C587CC9988462E36E5EE7451F855
+tests/host_stubs/main.h 27BC9F75CB21E220773C1C7AC92FC76674A61B02B6E6589DF6B587DEA6036D72
+tests/run-command-host.ps1 50ACBC1A12E3F72D8629CD7707A60420A4E5BBF5D17F75E16414620E0E8B852E
+Core/math/Xmath.c E78964121DE15301DD0AC1930D28731A098ED76E2071A4F7DED8DD35102F5E38
+Core/math/Xmath.h E4964A56A59E7E7135C224AD62E553440ED9232028224BC3DE32E196A42894D0
+
+
+005 limited standby observation — user screenshot 2026-11-07
+Condition: prior user statement was power bus disconnected, control/sensor power
+only; this message did not report a change. Single screenshot, exact run duration
+and live target image hash were not supplied. Do not invent a 30-second duration.
+Observed values:
+  axis_command_permit     = 0x00000000
+  board_output_enabled    = 0x00
+  foc_isr_max_cycles      = 0x00001D26 = 7462 cycles
+  foc_isr_overrun_count   = 0x00000000
+At configured 200 MHz, measured function maximum corresponds to 37.31 us.
+Configured 9996-cycle budget = 49.98 us; numeric difference = 12.67 us.
+This is an observed stopped-path function maximum, not measured full IRQ latency,
+publication PRIMASK duration, closed-loop WCET or a guaranteed spare CPU budget.
+HW PASS (limited observation): four requested standby values match expectation.
+Actual command publication/consumption, STOP/expiry on target, physical EN/PWM,
+fault response and closed-loop remain NOT_RUN. No actual producer exists yet.
+
+Version follow-up (read-only code review, no firmware edits in this response):
+HEAD remains 96509728ac533387b4fee189d98cf09e4e62c219 + 005 working changes.
+27 of the original 29 hashes match. board_safety.c adds one blank line only;
+user incremental log recompiles it, links successfully, and generates a new AXF.
+HEX and MAP remain byte-identical to the full-build evidence. This supports
+unchanged loadable HEX; it does not identify the exact cause of AXF byte changes
+or prove which image was actually downloaded to the board.
+User changes to FOC_T.uvoptx were preserved. No automatic rebuild or staging.
+
+Raw current build log excerpt:
+*** Using Compiler 'V5.06 update 7 (build 960)', folder: 'D:\ARM\ARMCC\Bin'
+Build target 'FOC_T'
+compiling board_safety.c...
+Program Size: Code=60776 RO-data=812 RW-data=764 ZI-data=24780  
+"FOC_T\FOC_T.axf" - 0 Error(s), 0 Warning(s).
+Build Time Elapsed:  00:00:09
+
+Raw board_safety.c diff:
+diff --git a/Core/Src/board_safety.c b/Core/Src/board_safety.c
+index 38dd1ee..8502119 100644
+--- a/Core/Src/board_safety.c
++++ b/Core/Src/board_safety.c
+@@ -31,6 +31,7 @@ static void GateInactive(void)
+     MODIFY_REG(BOARD_GATE_EN_GPIO_PORT->PUPDR, 3UL << shift, 0U);
+     MODIFY_REG(BOARD_GATE_EN_GPIO_PORT->MODER, 3UL << shift, 1UL << shift);
+ #endif
++
+ }
+ 
+ void BoardSafety_DisableOutputs(void)
+
+
+Updated/observed SHA256:
+Core/Src/board_safety.c E30F9724F40146718A07586BE241549735BB587DDC33B347B0CD9E0A73CD80E7
+MDK-ARM/FOC_T/FOC_T.axf C72A919316C309C9409B910E4604DE4866A18C5DB457AFAD6B270C7D7FB112B0
+MDK-ARM/FOC_T/FOC_T.hex 917D81B62FE9E6CA1706D5B4003FBFFCEA8B390D656CD0F51D20A55637B6AA30
+MDK-ARM/FOC_T/FOC_T.map E65A06FA2C3918538AA673EF9DC6BCB58C58116F69BD2202F1EFA63399E6BC13
+docs/validation/images/005-idle-watch-20261107.png 44ACA2EE5D17E8097B5404A85E2EDD2D858280BA27416DA7A054006D00BBA278
+
+Next: review/stage/commit this implementation and observation checkpoint manually.
+Then extend the same 005 feature with a separately guarded, compile-time disabled
+power-output test mode to exercise task publication -> TIM1 consume -> STOP/expiry.
+That mode is a plan only, not implemented here. Do not turn unknown production
+limits into synthetic operating limits or enable outputs to perform this test.

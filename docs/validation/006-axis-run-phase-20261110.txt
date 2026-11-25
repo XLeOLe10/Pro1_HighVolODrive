@@ -1,0 +1,153 @@
+006 — FOC运行阶段契约 — 2026-11-10 初次验证
+仓库：D:\stm32H750\High_fengshan\FOC_T
+分支：Xiao_ODrive
+基线：1d3f10179b77053c9ab91211eceff876f55a25a6 + 下列源码/测试/文档工作区差异；开始时工作区干净。
+实现已完成：SRC PASS / BUILD PASS / HOST PASS / HW NOT_RUN。
+未暂存、提交、推送或合并；未下载、复位或操作硬件。
+005已提交的有限截图不自动支持本次新固件通过。
+
+变更范围
+- open_foc.h/.c新增FOC_RunPhase和OpenFOC_GetRunPhase，先判私有command_run为空，再按align_ms_left派生。
+- 不存第二份运行阶段，不增加许可/epoch/请求队列。Getter仅初始化/TIM1上下文可用，不是跨任务快照。
+- foc_aligning全局/Init/无命令慢拍从1改0，Apply尾刷新兼容镜像；控制计算不用该镜像，因此没有更改PI、PWM、对齐倒计时、命令优先级或保护阈值。
+- app_runtime只将AxisStatus_Publish对齐参数改为Getter比较；最终输出许可/硬件先关/临界区外FOC复位顺序保留。
+- 测试目标始终向FOC传NULL，阶段IDLE及foc_aligning0是预期；硬件ALIGN/CLOSED运行不在本次HOST/禁输出台架结论中。
+- 旧1200对应慢拍调用次数，不称为已验证精确1200ms的物理对齐。
+
+审查与风险
+- 两路只读源码复核通过；私有变量写者仍为初始化/TIM1，board_safety仍有快速关断权。
+- 新Getter在Apply及TIM1状态发布调用，当前-O0下增加少量周期/临界区开销，实际最坏时间需板测；函数静态栈/链接数据如下，不当作实时最坏证明。
+- 阶段描述逻辑计算选择，不保证输出使能、反馈有效、转动或目标达成；FAULT仍轴/板级独立锁存。
+
+构建与资源
+工具链 ARMCC 5.06 update7 build960；按目标顺序执行uVision -b增量（未用-r）。
+Bench13秒、Normal14秒；两者仅重编open_foc.c/app_runtime.c并链接，均0错误0警告。
+Bench Code60348/RO812/RW904/ZI24856，静态RAM25760 B；Normal Code58084/RO812/RW776/ZI24776，静态RAM25552 B。
+ROM以map压缩后的Total ROM Size为准，不把未压缩RW直接相加。
+FOC_T_CommandBench: map Total ROM Size=61268 B;     OpenFOC_GetRunPhase  (Thumb, 24 bytes, Stack size 0 bytes, open_foc.o(i.OpenFOC_GetRunPhase))
+FOC_T: map Total ROM Size=58996 B;     OpenFOC_GetRunPhase  (Thumb, 24 bytes, Stack size 0 bytes, open_foc.o(i.OpenFOC_GetRunPhase))
+
+HOST
+运行 tests/run-command-host.ps1，实际axis_command_core.c/open_foc.c/Xmath.c及CPU寄存器桩。
+Core203断言 + FOC407断言 = 610，FOC保留原55、新增352；只有既有Cygwin FAST_CWD环境提示。
+新增覆盖Idle跨慢拍、镜像篡改、Getter只读、首次命令即时对齐、1199/1200边界、UPDATE不重置、STOP后快拍重启。
+实际Core在ALIGN和CLOSED两个阶段分别触发STOP/到期/ready丢失/fault，经active或NULL投影到FOC，检查PI归零、无自动恢复、合法新START；故障移除外部输入后仍锁存。
+此投影夹具不是实际AppRuntime_FastISR/PRIMASK/调度/物理门控仿真，不证明板端原子性或最坏耗时。
+
+HW NOT_RUN
+用户后续仅用FOC_T_CommandBench、母线断开、控制/传感器供电，连续运行约10秒观察4项：
+axis_bench_stage=100，foc_aligning=0，board_fault_mask=0，board_output_enabled=0。
+不再切换栈统计开关；新版本默认仍开启Idle统计。此回归只验证待机镜像/原禁输出演练共存，不声称物理对齐/闭环通过。
+
+原始日志（本轮实际执行，未删改内容）
+
+LOG: MDK-ARM/FOC_T_CommandBench/006-phase-bench-20261110.log
+*** Using Compiler 'V5.06 update 7 (build 960)', folder: 'D:\ARM\ARMCC\Bin'
+Build target 'FOC_T_CommandBench'
+compiling open_foc.c...
+compiling app_runtime.c...
+linking...
+Program Size: Code=60348 RO-data=812 RW-data=904 ZI-data=24856  
+FromELF: creating hex file...
+"FOC_T_CommandBench\FOC_T_CommandBench.axf" - 0 Error(s), 0 Warning(s).
+Build Time Elapsed:  00:00:13
+
+LOG: MDK-ARM/FOC_T/006-phase-normal-20261110.log
+*** Using Compiler 'V5.06 update 7 (build 960)', folder: 'D:\ARM\ARMCC\Bin'
+Build target 'FOC_T'
+compiling open_foc.c...
+compiling app_runtime.c...
+linking...
+Program Size: Code=58084 RO-data=812 RW-data=776 ZI-data=24776  
+FromELF: creating hex file...
+"FOC_T\FOC_T.axf" - 0 Error(s), 0 Warning(s).
+Build Time Elapsed:  00:00:14
+
+LOG: build/command-host/006-phase-host-20261110.log
+      0 [main] gcc 152324 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+gcc (GCC) 4.5.3
+Copyright (C) 2010 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+      0 [main] gcc 140944 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+      1 [main] axis_command_host_tests 49424 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+validation/configuration/finite values
+whole-frame A/B, full slot and separate acceptance/application
+STOP full-slot priority/idempotence/old epoch rejection
+START readiness rejection and UPDATE lifecycle
+pending/active expiry, no renewal of expired run, tick wrap/ambiguity
+fault after publication and final-gate fault, sticky denial
+bad sequence/epoch and all metadata exhaustion paths
+limit decrease on non-slow-loop tick; invalid clamp inputs
+PASS: 8 scenarios, 203 assertions; synthetic HOST limits only.
+Boundary: sequential core tests do not prove Cortex-M7 PRIMASK timing or physical PWM safety.
+      0 [main] gcc 151632 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+      0 [main] open_foc_command_host 101416 find_fast_cwd: WARNING: Couldn't compute FAST_CWD pointer.  Please report this problem to
+the public mailing list cygwin@cygwin.com
+PASS: 407 FOC command integration assertions; CPU register stubs only
+HOST command and FOC integration suites PASS
+
+SHA256：当前输入/实际产物（不含循环文档自签名）
+bbc397468b0db653c7d01badaa9f202a34b699476ffa6cdfde8a929870245fab  Core/Inc/open_foc.h
+6f2c934773baa9caf6c287fca3ad122b37d8847c0cd6b832a74fbb708d756e61  Core/Src/open_foc.c
+51e88beb519a89d87637ab9104909653147ff088ec5dfc58b59ffc0da3a2b639  Core/Src/app_runtime.c
+7cced1e9c1ef8c61188f556eb4ab9a46a220b21a55cfde3d708f84dc46c5e124  tests/open_foc_command_host.c
+7a7f6198d17a06c75cb4b63d5ef97a9eb248e758c09c0848bf14b877140c930a  Core/Src/axis_command_core.c
+d74fe8d9c30bdf5bea508d8c8ed4b4d542b5be9e900d28b2e37c55a3461d4692  Core/Inc/axis_command_core.h
+5f1f4a9df1e64e697561dd83bbb34a268c0c614288c18fea9a033f45ac405201  Core/Src/axis_command.c
+f4e21847e3f3bdfd441db3edec7a987d6c2c5ef1d8b995c006b5a161113c1079  Core/Inc/axis_command.h
+097424ef92a573dc910baee11b4dd95cae4c043408a18aecd9e63a050e332cdb  Core/Src/axis_status.c
+7672d284d376a1f636fa85e7c092fb4b7613493382e584023bf5ead5a6e1d2ab  Core/Inc/axis_status.h
+1fa33a84c0c29cb73838940c2dfab96b0f6b5bf6f602760f53921ab69a723926  Core/Src/board_safety.c
+9100c8d19c328b70a433476d810aabd8247c45df4152e667733f0bf0e861f30a  Core/Inc/board_config.h
+d3be7141aa698c1e1cb85b5871671c5a2a1b9fde77f2bd535407fb6cf1ccfed8  Core/Inc/app_policy.h
+e78964121de15301dd0ac1930d28731a098ed76e2071a4f7ded8dd35102f5e38  Core/math/Xmath.c
+e4964a56a59e7e7135c224ad62e553440ed9232028224bc3de32e196a42894d0  Core/math/Xmath.h
+6bea976f89ce73634cfd16b2d31adc33335702635289bed02da505a38d4825e7  Core/Src/freertos.c
+1be63ae9823901bf7a9d16d69458d9e2a67796001b383c841240bf4b294d3e12  Core/Inc/FreeRTOSConfig.h
+4a70809d3e3e55123cc9bed3a5e3439fd9eb7eb5fb4171b0f9e3b75990b9c112  FOC_T.ioc
+e2a55a714fa3d8f17e2935cc0f30fb7380317d9cc257d7b13a35c3a5ce8a6a34  tests/axis_command_host_tests.c
+50acbc1a12e3f72d8629cd7707a60420a4e5bbf5d17f75e16414620e0e8b852e  tests/run-command-host.ps1
+ffcfe3a2238b67e844910124e95c3141e427c587cc9988462e36e5ee7451f855  tests/host_stubs/tim.h
+27bc9f75cb21e220773c1c7ac92fc76674a61b02b6e6589df6b587dea6036d72  tests/host_stubs/main.h
+39f4b6091ddfb1d3024bbc66bbb3c95da8e34ec8a0f6b18bc6f8dbf773f44c84  MDK-ARM/FOC_T.uvprojx
+ed428d1ca43ce19228a88073d9004b5710cd0385676dd1ba7815b86c1ef46cc2  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.hex
+43e07c8646762c24a099b1524f477bc8c0415fe9d42a1c4c92197c9ad84f3b52  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.axf
+a4e807ee0cc49f526bec22946c3cb4fd0365b9876dab5b8172fb37c6cac65607  MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.map
+6fde8f85ad0ee1af7fa6b987cd30d3eb02f81e9bffbe23444881be7c22f37d74  MDK-ARM/FOC_T/FOC_T.hex
+8d2493bc4f1d69755c5c903fdba766bd1fbbada5494a27df3badfe5c00f1bb5c  MDK-ARM/FOC_T/FOC_T.axf
+e5beb2110422cb283efee66e5bd22d794f29a823f7644e72b64e32ad4cdab2c4  MDK-ARM/FOC_T/FOC_T.map
+b7462b6ddeae22f09365d231b4677af3cc0274ff6e9207c8fc5de70839acac90  MDK-ARM/FOC_T_CommandBench/006-phase-bench-20261110.log
+b9b96c3f30f7fcbcf7fc867065365e83b78595946aca84be4ef260ac4734d63b  MDK-ARM/FOC_T/006-phase-normal-20261110.log
+68e56f91c4d92c2fd6db17fc7c04328b8a3446f602c8f1c43af74d254ac3427c  build/command-host/006-phase-host-20261110.log
+
+追加：2026-11-10 用户四项Watch板测截图（不覆盖上述初次HW NOT_RUN记录）
+当前判定：HW PASS，仅本轮禁输出待机/命令演练四项的有限观察。
+截图原件：C:/Users/LEGION/AppData/Local/Temp/codex-clipboard-5f74bd11-f5eb-4a7b-9032-ca226c267b98.png
+仓库归档：docs/validation/006-axis-run-phase-20261110-watch.png（原字节复制，无编辑）
+截图SHA256：9921aa01de04c65c4f43c0354c2099a3e3b6da6210bac5579b6835901eca804e
+实际可见值：
+  axis_bench_stage = 0x00000064 (100)
+  foc_aligning = 0x00
+  board_fault_mask = 0x00000000
+  board_output_enabled = 0x00
+解释：命令演练到达完成阶段，FOC待机镜像为0，截图时无锁存板级故障，软件输出镜像为0。
+条件：承接上一轮FOC_T_CommandBench、母线断开且控制/传感器供电的安排；本消息只提供截图，没有另报供电变化。
+边界：截图未显示目标选择、连续运行时长或板端固件指纹；Watch四项不是原子采样，也不是物理EN/MOE/引脚测量。
+不把该截图外推为长期稳定、ALIGNING/CLOSED_LOOP实机转换、实际对齐/闭环、物理保护或TIM1/临界区最坏耗时通过。
+
+版本复核：分支Xiao_ODrive、HEAD仍1d3f10179b77053c9ab91211eceff876f55a25a6；006源文件/测试差异保留，无新增固件编辑。
+原清单32项中31项仍一致；唯一差异为Bench AXF整文件SHA256。
+当前Bench AXF SHA256：54b30700f36cf5677da0801042884a6b26c0a21dc75e2aae2fa117e5f6b352e4
+原Bench HEX及map、普通目标产物、相关源码/工程清单/日志仍与原清单一致。
+只读导出命令（仅在被忽略的build目录产生验证文件，不构建/下载）：
+  D:/ARM/ARMCC/Bin/fromelf.exe --i32combined --output=build/006-phase/006-board-current-axf.hex MDK-ARM/FOC_T_CommandBench/FOC_T_CommandBench.axf
+当前AXF导出HEX SHA256：ed428d1ca43ce19228a88073d9004b5710cd0385676dd1ba7815b86c1ef46cc2
+该值与初次Bench HEX一致；另按Intel HEX校验和/地址解码比较，加载字节61268 B及入口完全相同。
+AXF全文件变化原因未确证；本地加载映像一致不替代板端读回。保留旧指纹，不改写原证据。
+本次只归档截图、追加记录并更新README/spec/架构验收状态；未重新构建、下载、复位、暂存、提交或推送。

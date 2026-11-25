@@ -1,4 +1,5 @@
 #include "ad2s1210.h"
+#include "app_policy.h"
 #include "main.h"
 #include "spi.h"
 
@@ -23,10 +24,6 @@
 #define AD2S1210_CLKIN_HZ                  8000000UL
 #define AD2S1210_TWO_PI                    6.28318530718f
 #define AD2S1210_POSITION_SCALE_RAD        (AD2S1210_TWO_PI / 65536.0f)
-#define AD2S1210_POSITION_SAMPLE_HZ        1000.0f
-#define AD2S1210_POSITION_RPM_SCALE        \
-    (60.0f * AD2S1210_POSITION_SAMPLE_HZ / 65536.0f / \
-     AD2S1210_RESOLVER_POLE_PAIRS)
 #define AD2S1210_VEL_MAX_RPS_16BIT         122.0703125f
 #define AD2S1210_RESOLVER_POLE_PAIRS       4.0f
 #define AD2S1210_SPEED_FILTER_ALPHA        0.10f
@@ -97,31 +94,229 @@ volatile uint32_t ad2s_acquisition_max_cycles = 0U;
 volatile uint32_t ad2s_acquisition_budget_cycles = 0U;
 volatile uint32_t ad2s_acquisition_over_budget_count = 0U;
 
-static uint16_t ad2s_previous_position_raw = 0U;
-static uint8_t ad2s_position_speed_ready = 0U;
+volatile uint32_t ad2s_snapshot_max_cycles = 0U;
+volatile uint32_t ad2s_sample_edge_max_cycles = 0U;
+volatile uint32_t ad2s_sample_interval_cycles = 0U;
+volatile uint32_t ad2s_sample_interval_max_cycles = 0U;
+volatile uint32_t ad2s_sample_gap_count = 0U;
 
-static float AD2S1210_PositionDeltaToMechanicalRPM(uint16_t position_raw)
+static uint16_t ad2s_previous_position_raw = 0U;
+static uint32_t ad2s_previous_sample_cycles = 0U;
+static uint32_t ad2s_previous_sample_tick_ms = 0U;
+static uint8_t ad2s_position_speed_ready = 0U;
+static volatile AD2S1210_FeedbackSnapshot ad2s_snapshot;
+
+#if AXIS_COMMAND_BENCH_ENABLE
+/* AD2S AGE TRACE BEGIN: actual event pairing tested on the host. */
+volatile AD2S1210_AgeTrace ad2s_age_trace = {
+    AD2S_AGE_IDLE, 0U, 0U, UINT32_MAX, UINT32_MAX, UINT32_MAX
+};
+static volatile uint32_t age_source_cycles;
+static volatile uint32_t age_source_tick_ms;
+
+void AD2S1210_ArmAgeTrace(const AD2S1210_FeedbackSnapshot *source,
+                         uint32_t check_cycles)
+{
+    uint32_t state = AD2S_AGE_UNKNOWN;
+    if (ad2s_age_trace.state != AD2S_AGE_IDLE)
+        return;
+
+    if (source != NULL)
+    {
+        age_source_cycles = source->sample_cycles;
+        age_source_tick_ms = source->sample_tick_ms;
+        ad2s_age_trace.source_sequence = source->sequence;
+        ad2s_age_trace.check_age_cycles = (uint32_t)(check_cycles - source->sample_cycles);
+        if ((source->valid != 0U) && (source->speed_valid != 0U) &&
+            (ad2s_dwt_ready != 0U))
+            state = AD2S_AGE_PENDING;
+    }
+    __DMB();
+    ad2s_age_trace.state = state;
+}
+
+/* Called only by the serialized publisher after observing PENDING. On a
+   single core TIM1 may have armed *after* this very snapshot became visible.
+   Its matching source callback then leaves the request for the next attempt. */
+static void AD2S1210_CompleteAgeTrace(const AD2S1210_FeedbackSnapshot *next,
+                                      uint32_t published_cycles)
+{
+    uint32_t source_seq = ad2s_age_trace.source_sequence;
+    uint32_t state = AD2S_AGE_UNKNOWN;
+    uint32_t edge_span;
+    uint32_t publish_span;
+    uint32_t wall_ms;
+
+    if (next->sequence == source_seq)
+        return;
+    ad2s_age_trace.next_sequence = next->sequence;
+    if (next->sequence == (uint32_t)(source_seq + 1U))
+    {
+        if (next->valid == 0U)
+        {
+            /* The invalid snapshot carries the old timestamp. */
+            state = AD2S_AGE_INVALID_NEXT;
+        }
+        else
+        {
+            edge_span = (uint32_t)(next->sample_cycles - age_source_cycles);
+            publish_span = (uint32_t)(published_cycles - age_source_cycles);
+            wall_ms = (uint32_t)(HAL_GetTick() - age_source_tick_ms);
+            /* 1 second is far below half a DWT wrap at 200 MHz. The separate
+               millisecond clock rejects a long pause across a DWT wrap.
+               A replay captured while clocks are halted needs a fresh run. */
+            if ((ad2s_dwt_ready != 0U) &&
+                ((DWT->CTRL & DWT_CTRL_CYCCNTENA_Msk) != 0U) &&
+                (wall_ms <= 1000U) &&
+                ((uint32_t)(next->sample_tick_ms - age_source_tick_ms) <= wall_ms) &&
+                (publish_span < 0x80000000UL) && (publish_span <= SystemCoreClock) &&
+                (ad2s_age_trace.check_age_cycles != 0U) &&
+                (ad2s_age_trace.check_age_cycles < publish_span) &&
+                (edge_span != 0U) && (edge_span < publish_span))
+            {
+                ad2s_age_trace.edge_interval_cycles = edge_span;
+                ad2s_age_trace.edge_to_publish_cycles = publish_span - edge_span;
+                state = (edge_span <= ad2s_age_trace.check_age_cycles) ?
+                    AD2S_AGE_EDGE_BY_CHECK : AD2S_AGE_EDGE_AFTER_CHECK;
+            }
+        }
+    }
+    __DMB();
+    ad2s_age_trace.state = state;
+}
+/* AD2S AGE TRACE END */
+#endif
+
+static void AD2S1210_PublishSnapshot(const AD2S1210_FeedbackSnapshot *snapshot)
+{
+    uint32_t saved_primask;
+    uint32_t start_cycles;
+    uint32_t elapsed_cycles;
+#if AXIS_COMMAND_BENCH_ENABLE
+    uint32_t published_cycles;
+#endif
+
+    /* PRIMASK also excludes priority-0 TIM1. This region contains only
+       eight fixed field copies/barriers, no SPI or float calculations.
+       NMI/fault handlers must not access this frame. */
+    saved_primask = __get_PRIMASK();
+    __disable_irq();
+    start_cycles = DWT->CYCCNT;
+    __DMB();
+    ad2s_snapshot.position_rad = snapshot->position_rad;
+    ad2s_snapshot.speed_rpm = snapshot->speed_rpm;
+    ad2s_snapshot.sample_cycles = snapshot->sample_cycles;
+    ad2s_snapshot.sample_tick_ms = snapshot->sample_tick_ms;
+    ad2s_snapshot.sequence = snapshot->sequence;
+    ad2s_snapshot.valid = snapshot->valid;
+    ad2s_snapshot.speed_valid = snapshot->speed_valid;
+    ad2s_snapshot.fault = snapshot->fault;
+    __DMB();
+#if AXIS_COMMAND_BENCH_ENABLE
+    /* Reuse the existing endpoint after the payload barrier, before unmask. */
+    published_cycles = DWT->CYCCNT;
+    elapsed_cycles = (uint32_t)(published_cycles - start_cycles);
+#else
+    elapsed_cycles = (uint32_t)(DWT->CYCCNT - start_cycles);
+#endif
+    if (elapsed_cycles > ad2s_snapshot_max_cycles)
+    {
+        ad2s_snapshot_max_cycles = elapsed_cycles;
+    }
+    __set_PRIMASK(saved_primask);
+#if AXIS_COMMAND_BENCH_ENABLE
+    if (ad2s_age_trace.state == AD2S_AGE_PENDING)
+        AD2S1210_CompleteAgeTrace(snapshot, published_cycles);
+#endif
+}
+
+void AD2S1210_GetSnapshot(AD2S1210_FeedbackSnapshot *snapshot)
+{
+    uint32_t saved_primask;
+    uint32_t start_cycles;
+    uint32_t elapsed_cycles;
+
+    if (snapshot == NULL)
+    {
+        return;
+    }
+    /* PRIMASK also excludes priority-0 TIM1. This region contains only
+       eight fixed field copies/barriers, no SPI or float calculations.
+       NMI/fault handlers must not access this frame. */
+    saved_primask = __get_PRIMASK();
+    __disable_irq();
+    start_cycles = DWT->CYCCNT;
+    __DMB();
+    snapshot->position_rad = ad2s_snapshot.position_rad;
+    snapshot->speed_rpm = ad2s_snapshot.speed_rpm;
+    snapshot->sample_cycles = ad2s_snapshot.sample_cycles;
+    snapshot->sample_tick_ms = ad2s_snapshot.sample_tick_ms;
+    snapshot->sequence = ad2s_snapshot.sequence;
+    snapshot->valid = ad2s_snapshot.valid;
+    snapshot->speed_valid = ad2s_snapshot.speed_valid;
+    snapshot->fault = ad2s_snapshot.fault;
+    __DMB();
+    elapsed_cycles = (uint32_t)(DWT->CYCCNT - start_cycles);
+    if (elapsed_cycles > ad2s_snapshot_max_cycles)
+    {
+        ad2s_snapshot_max_cycles = elapsed_cycles;
+    }
+    __set_PRIMASK(saved_primask);
+}
+
+static float AD2S1210_PositionDeltaToMechanicalRPM(
+    uint16_t position_raw, uint32_t sample_cycles, uint32_t sample_tick_ms,
+    uint32_t *speed_valid)
 {
     int16_t delta;
+    uint32_t elapsed_cycles;
+    uint32_t elapsed_ms;
 
+    *speed_valid = 0U;
     if (ad2s_position_speed_ready == 0U)
     {
         ad2s_previous_position_raw = position_raw;
+        ad2s_previous_sample_cycles = sample_cycles;
+        ad2s_previous_sample_tick_ms = sample_tick_ms;
         ad2s_position_speed_ready = 1U;
         return 0.0f;
     }
 
-    /* The signed 16-bit subtraction handles the 0/65535 wrap naturally.
-       At the 1 kHz sampling rate the expected delta is far below half a turn. */
+    elapsed_cycles = (uint32_t)(sample_cycles - ad2s_previous_sample_cycles);
+    elapsed_ms = (uint32_t)(sample_tick_ms - ad2s_previous_sample_tick_ms);
     delta = (int16_t)(position_raw - ad2s_previous_position_raw);
     ad2s_previous_position_raw = position_raw;
+    ad2s_previous_sample_cycles = sample_cycles;
+    ad2s_previous_sample_tick_ms = sample_tick_ms;
+    ad2s_sample_interval_cycles = elapsed_cycles;
+    if (elapsed_cycles > ad2s_sample_interval_max_cycles)
+    {
+        ad2s_sample_interval_max_cycles = elapsed_cycles;
+    }
+
+    /* Millisecond time rejects gaps longer than a DWT wrap too. An overdue
+       frame resets the difference baseline, never inventing a 1 ms delta.
+       This is a scheduling budget, not a motor-speed aliasing guarantee. */
+    if ((ad2s_dwt_ready == 0U) || (elapsed_cycles == 0U) ||
+        (elapsed_ms > APP_FEEDBACK_MAX_AGE_MS) ||
+        (elapsed_cycles > ((SystemCoreClock / 1000U) *
+                           APP_FEEDBACK_MAX_AGE_MS)))
+    {
+        ad2s_sample_gap_count++;
+        return 0.0f;
+    }
+
+    /* Position change must be below half a resolver revolution between
+       samples. Signed subtraction then handles crossing 0/65535. */
     if ((delta >= -AD2S1210_VELOCITY_DEADBAND_COUNTS) &&
         (delta <= AD2S1210_VELOCITY_DEADBAND_COUNTS))
     {
         delta = 0;
     }
-
-    return (float)delta * AD2S1210_POSITION_RPM_SCALE;
+    *speed_valid = 1U;
+    return (float)delta *
+           (60.0f / 65536.0f / AD2S1210_RESOLVER_POLE_PAIRS) *
+           ((float)SystemCoreClock / (float)elapsed_cycles);
 }
 
 static void AD2S1210_DWT_Init(void)
@@ -191,13 +386,41 @@ static void AD2S1210_ModeConfig(void)
     HAL_GPIO_WritePin(AD2S1210_A1_PORT, AD2S1210_A1_PIN, GPIO_PIN_SET);
 }
 
-static void AD2S1210_PulseSample(void)
+static void AD2S1210_PulseSample(uint32_t *sample_cycles,
+                                    uint32_t *sample_tick_ms)
 {
-    /* Make the starting level explicit, then generate one clean falling edge.
-       Each 1 us interval exceeds the AD2S1210 timing requirement at 8 MHz. */
+    uint32_t saved_primask;
+    uint32_t edge_cycles;
+    uint32_t edge_tick_ms;
+    uint32_t start_cycles;
+    uint32_t elapsed_cycles;
+
     HAL_GPIO_WritePin(AD2S1210_SAMPLE_PORT, AD2S1210_SAMPLE_PIN, GPIO_PIN_SET);
     AD2S1210_ShortDelay();
-    HAL_GPIO_WritePin(AD2S1210_SAMPLE_PORT, AD2S1210_SAMPLE_PIN, GPIO_PIN_RESET);
+    /* Do not allow preemption between the sample edge and its timestamp.
+       Neither the following 1 us hold nor the SPI transfer is masked. */
+    saved_primask = __get_PRIMASK();
+    __disable_irq();
+    start_cycles = DWT->CYCCNT;
+    AD2S1210_SAMPLE_PORT->BSRR = (uint32_t)AD2S1210_SAMPLE_PIN << 16U;
+    __DSB();
+    edge_cycles = DWT->CYCCNT;
+    edge_tick_ms = HAL_GetTick();
+    __DMB();
+    elapsed_cycles = (uint32_t)(DWT->CYCCNT - start_cycles);
+    if (elapsed_cycles > ad2s_sample_edge_max_cycles)
+    {
+        ad2s_sample_edge_max_cycles = elapsed_cycles;
+    }
+    __set_PRIMASK(saved_primask);
+    if (sample_cycles != NULL)
+    {
+        *sample_cycles = edge_cycles;
+    }
+    if (sample_tick_ms != NULL)
+    {
+        *sample_tick_ms = edge_tick_ms;
+    }
     AD2S1210_ShortDelay();
     HAL_GPIO_WritePin(AD2S1210_SAMPLE_PORT, AD2S1210_SAMPLE_PIN, GPIO_PIN_SET);
     AD2S1210_ShortDelay();
@@ -256,10 +479,9 @@ static HAL_StatusTypeDef AD2S1210_Transfer8(uint8_t tx, uint8_t *rx)
         return HAL_ERROR;
     }
 
-    /* Configuration access is only used before TIM1 is started.  Use the same
-       HAL transfer path that was verified in the standalone AD2S diagnostic
-       project; the bounded direct-register path remains in normal-mode ISR
-       reads where a SysTick timeout cannot be used safely. */
+    /* Configuration runs before TIM1 starts. Runtime normal-frame reads
+       use the same bounded HAL path in appTask; no SPI runs in TIM1.
+       The timeout follows the independent HAL TIM7 time base. */
     HAL_GPIO_WritePin(AD2S1210_WR_PORT, AD2S1210_WR_PIN, GPIO_PIN_RESET);
     __NOP();
     __NOP();
@@ -329,15 +551,17 @@ static HAL_StatusTypeDef AD2S1210_ReadAndClearFault(uint8_t *fault)
        register remains the last addressed byte for normal-mode 24-bit reads. */
     AD2S1210_ModeConfig();
     AD2S1210_ShortDelay();
-    AD2S1210_PulseSample();
+    AD2S1210_PulseSample(NULL, NULL);
     status = AD2S1210_ReadRegister(AD2S1210_REG_FAULT, fault);
-    AD2S1210_PulseSample();
+    AD2S1210_PulseSample(NULL, NULL);
     return status;
 }
 
 static HAL_StatusTypeDef AD2S1210_ReadNormalHAL(uint8_t velocity_mode,
                                                 uint16_t *angular_data,
-                                                uint8_t *fault)
+                                                uint8_t *fault,
+                                                uint32_t *sample_cycles,
+                                                uint32_t *sample_tick_ms)
 {
     HAL_StatusTypeDef status;
     uint8_t tx[3] = {0U, 0U, 0U};
@@ -357,7 +581,7 @@ static HAL_StatusTypeDef AD2S1210_ReadNormalHAL(uint8_t velocity_mode,
         AD2S1210_ModePosition();
     }
     AD2S1210_ShortDelay();
-    AD2S1210_PulseSample();
+    AD2S1210_PulseSample(sample_cycles, sample_tick_ms);
 
     HAL_GPIO_WritePin(AD2S1210_WR_PORT, AD2S1210_WR_PIN, GPIO_PIN_RESET);
     __NOP();
@@ -382,6 +606,7 @@ void AD2S1210_Init(void)
     uint16_t diagnose_position = 0U;
     uint8_t diagnose_fault = 0xFFU;
     uint8_t recovery_clear_fault = 0xFFU;
+    AD2S1210_FeedbackSnapshot empty_snapshot = {0};
 
     __HAL_RCC_GPIOB_CLK_ENABLE();
     __HAL_RCC_GPIOE_CLK_ENABLE();
@@ -440,12 +665,25 @@ void AD2S1210_Init(void)
     ad2s_position_read_count = 0U;
     ad2s_velocity_read_count = 0U;
     ad2s_previous_position_raw = 0U;
+    ad2s_previous_sample_cycles = 0U;
+    ad2s_previous_sample_tick_ms = 0U;
     ad2s_position_speed_ready = 0U;
+    ad2s_position_raw = 0U;
+    ad2s_position_rad = 0.0f;
+    ad2s_speed_rpm = 0.0f;
+    ad2s_speed_rpm_filt = 0.0f;
     ad2s_spi_error_count = 0U;
+    ad2s_snapshot_max_cycles = 0U;
+    ad2s_sample_edge_max_cycles = 0U;
+    ad2s_sample_interval_cycles = 0U;
+    ad2s_sample_interval_max_cycles = 0U;
+    ad2s_sample_gap_count = 0U;
     ad2s_acquisition_last_cycles = 0U;
     ad2s_acquisition_max_cycles = 0U;
     ad2s_acquisition_over_budget_count = 0U;
     AD2S1210_DWT_Init();
+    empty_snapshot.fault = 0xFFU;
+    AD2S1210_PublishSnapshot(&empty_snapshot);
     ad2s_acquisition_budget_cycles =
         (SystemCoreClock / 1000000U) * AD2S1210_ACQUISITION_BUDGET_US;
 
@@ -576,7 +814,8 @@ void AD2S1210_Init(void)
     {
         diagnose_status = AD2S1210_ReadNormalHAL(0U,
                                                  &diagnose_position,
-                                                 &diagnose_fault);
+                                                 &diagnose_fault,
+                                                 NULL, NULL);
     }
     if (diagnose_status == HAL_OK)
     {
@@ -602,7 +841,7 @@ void AD2S1210_Init(void)
                 AD2S1210_ModePosition();
                 HAL_Delay(2U);
                 diagnose_status = AD2S1210_ReadNormalHAL(
-                    0U, &diagnose_position, &diagnose_fault);
+                    0U, &diagnose_position, &diagnose_fault, NULL, NULL);
             }
 
             if (diagnose_status == HAL_OK)
@@ -634,10 +873,9 @@ void AD2S1210_Init(void)
         }
     }
     ad2s_runtime_spi_status = (uint8_t)diagnose_status;
-    /* Commissioning mode: initialization/configuration/fault results remain
-       visible in their status variables, but none of them may prevent the
-       1 kHz task from continuously attempting position and speed reads. */
-    ad2s_initialized = 1U;
+    /* Preserve the actual CONTROL/EXC/threshold configuration result.
+       A failed initialization must not be forced to success to keep polling.
+       Device fault bits remain separate diagnostics in this migration. */
     ad2s_fault_diagnose_status = (uint8_t)diagnose_status;
     AD2S1210_ModePosition();
 #if (AD2S1210_SLOW_LINK_DIAG != 0U)
@@ -647,77 +885,53 @@ void AD2S1210_Init(void)
 
 void AD2S1210_Sample(void)
 {
-    HAL_StatusTypeDef status;
-    uint16_t position;
-    uint8_t fault;
-
-    if (ad2s_initialized == 0U)
-    {
-        ad2s_feedback_valid = 0U;
-        return;
-    }
-
-    status = AD2S1210_ReadNormalHAL(0U, &position, &fault);
-    if (status != HAL_OK)
-    {
-        ad2s_spi_error_count++;
-        ad2s_valid_streak = 0U;
-        ad2s_feedback_valid = 0U;
-        return;
-    }
-
-    ad2s_position_raw = position;
-    ad2s_position_rad = (float)position * AD2S1210_POSITION_SCALE_RAD;
-    ad2s_position_read_count++;
-    AD2S1210_UpdateFeedbackHealth(fault);
+    /* Compatibility entry point: a single task-owned acquisition pipeline. */
+    AD2S1210_Run_1kHz();
 }
 
 void AD2S1210_Run_1kHz(void)
 {
-#if (AD2S1210_SLOW_LINK_DIAG != 0U)
-    /* Diagnostic-only build keeps the gate-enable condition blocked. */
-    ad2s_feedback_valid = 0U;
-#else
+    AD2S1210_FeedbackSnapshot snapshot;
+    uint32_t start_cycles = DWT->CYCCNT;
+#if (AD2S1210_SLOW_LINK_DIAG == 0U)
     HAL_StatusTypeDef status;
     uint16_t position_u16;
     uint8_t position_fault;
+    uint32_t sample_cycles = 0U;
+    uint32_t sample_tick_ms = 0U;
     float rpm;
-    uint32_t start_cycles = 0U;
+#endif
 
-    if (ad2s_dwt_ready != 0U)
-    {
-        start_cycles = DWT->CYCCNT;
-    }
-
+    AD2S1210_GetSnapshot(&snapshot);
+    snapshot.sequence++;
+#if (AD2S1210_SLOW_LINK_DIAG != 0U)
+    goto acquisition_invalid;
+#else
     if (ad2s_initialized == 0U)
     {
-        ad2s_position_data_valid = 0U;
-        ad2s_valid_streak = 0U;
-        ad2s_feedback_valid = 0U;
-        goto acquisition_done;
+        goto acquisition_invalid;
     }
 
-    /* Read one fresh position/fault frame at 1 kHz.  Mechanical speed is
-       calculated from successive position samples, so an unusable AD2S1210
-       velocity register cannot leave the Watch speed stuck at zero. */
-    status = AD2S1210_ReadNormalHAL(0U, &position_u16, &position_fault);
+    /* SPI/GPIO delays and float calculations remain outside publication. */
+    status = AD2S1210_ReadNormalHAL(0U, &position_u16, &position_fault,
+                                     &sample_cycles, &sample_tick_ms);
+    ad2s_runtime_spi_status = (uint8_t)status;
     if (status != HAL_OK)
     {
         ad2s_spi_error_count++;
-        ad2s_position_data_valid = 0U;
-        ad2s_valid_streak = 0U;
-        ad2s_feedback_valid = 0U;
-        goto acquisition_done;
+        goto acquisition_invalid;
     }
 
     ad2s_position_raw = position_u16;
     ad2s_position_data_valid = 1U;
     ad2s_position_rad = (float)position_u16 * AD2S1210_POSITION_SCALE_RAD;
-    rpm = AD2S1210_PositionDeltaToMechanicalRPM(position_u16);
+    rpm = AD2S1210_PositionDeltaToMechanicalRPM(position_u16,
+                sample_cycles, sample_tick_ms, &snapshot.speed_valid);
     ad2s_speed_rpm = rpm;
-    if (ad2s_position_read_count == 0U)
+    if (snapshot.speed_valid == 0U)
     {
-        ad2s_speed_rpm_filt = rpm;
+        /* First/recovery frame has position but no measured speed. */
+        ad2s_speed_rpm_filt = 0.0f;
     }
     else
     {
@@ -727,17 +941,37 @@ void AD2S1210_Run_1kHz(void)
     ad2s_position_read_count++;
     ad2s_velocity_read_count++;
     AD2S1210_UpdateFeedbackHealth(position_fault);
-
-acquisition_done:
+    snapshot.position_rad = ad2s_position_rad;
+    snapshot.speed_rpm = ad2s_speed_rpm_filt;
+    snapshot.sample_cycles = sample_cycles;
+    snapshot.sample_tick_ms = sample_tick_ms;
+    snapshot.valid = 1U;
+    snapshot.fault = position_fault;
+    AD2S1210_PublishSnapshot(&snapshot);
     AD2S1210_RecordAcquisitionCycles(start_cycles);
+    return;
 #endif
+
+acquisition_invalid:
+    ad2s_position_data_valid = 0U;
+    ad2s_valid_streak = 0U;
+    ad2s_feedback_valid = 0U;
+    ad2s_position_speed_ready = 0U;
+    ad2s_speed_rpm = 0.0f;
+    ad2s_speed_rpm_filt = 0.0f;
+    snapshot.valid = 0U;
+    snapshot.speed_valid = 0U;
+    snapshot.speed_rpm = 0.0f;
+    /* Old position/time/fault remain diagnostic only; valid=0 makes their
+       unusable state explicit. A new pair of good frames rebuilds speed. */
+    AD2S1210_PublishSnapshot(&snapshot);
+    AD2S1210_RecordAcquisitionCycles(start_cycles);
 }
 
 void AD2S1210_Run_20kHz(void)
 {
-    /* Intentionally empty.  Position/speed are acquired at 1 kHz in the main
-       loop and held here for the 20 kHz current loop.  This prevents a slow
-       polling SPI transaction from ever consuming the PWM interrupt budget. */
+    /* Intentionally empty. appTask acquires position/speed; TIM1 reads a
+       complete AD2S1210_GetSnapshot() copy. No polling SPI belongs here. */
 }
 
 uint16_t AD2S1210_ReadPosition(void)
